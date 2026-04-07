@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gravity Smasher</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #111; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const WORLD_W = 4000;
+const WORLD_H = 4000;
+const PHYSICS_DT = 1 / 60;
+const GRAVITY_ACCEL = 2400;
+const DRAG = 0.98;
+const TERMINAL_SPEED = 900;
+const GRID_SPACING = 100;
+const NUM_OBJECTS = 200;
+const PLAYER_RADIUS_SCALE = 3;
+const MOUSE_MAX_DIST = 400; // screen px at which acceleration reaches full strength
+
+// ---------------------------------------------------------------------------
+// Canvas setup
+// ---------------------------------------------------------------------------
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function rand(lo, hi) {
+  return lo + Math.random() * (hi - lo);
+}
+
+function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+function playerRadius(mass) {
+  return Math.sqrt(mass) * PLAYER_RADIUS_SCALE;
+}
+
+function toughnessColor(toughness) {
+  const t = (toughness - 50) / 450; // 0..1
+  const r = Math.round(55 + 200 * t);
+  const g = Math.round(220 - 180 * t);
+  return `rgb(${r},${g},50)`;
+}
+
+// ---------------------------------------------------------------------------
+// Game state
+// ---------------------------------------------------------------------------
+let player = { x: WORLD_W / 2, y: WORLD_H / 2, vx: 0, vy: 0, mass: 10 };
+let mouseX = 0; // screen-space coords
+let mouseY = 0;
+let objects = [];
+
+function spawnObject() {
+  const radius = rand(5, 20);
+  return {
+    x: rand(radius, WORLD_W - radius),
+    y: rand(radius, WORLD_H - radius),
+    radius,
+    toughness: rand(50, 500),
+  };
+}
+
+function initObjects() {
+  objects = [];
+  for (let i = 0; i < NUM_OBJECTS; i++) objects.push(spawnObject());
+}
+
+function resetPlayer() {
+  player.x = WORLD_W / 2;
+  player.y = WORLD_H / 2;
+  player.vx = 0;
+  player.vy = 0;
+  player.mass = 10;
+}
+
+initObjects();
+
+// ---------------------------------------------------------------------------
+// Input — mouse position drives gravity direction and strength
+// ---------------------------------------------------------------------------
+canvas.addEventListener("mousemove", (e) => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+});
+
+// ---------------------------------------------------------------------------
+// Physics / simulation  (pure logic — no rendering)
+// ---------------------------------------------------------------------------
+// Gravity vector computed from mouse — stored for rendering
+let gravityAngle = 0;
+let gravityStrength = 0;
+
+function update(dt) {
+  // 1. Apply gravity acceleration toward mouse cursor
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const dx = mouseX - cx;
+  const dy = mouseY - cy;
+  const mouseDist = Math.hypot(dx, dy);
+
+  if (mouseDist > 1) {
+    gravityAngle = Math.atan2(dy, dx);
+    gravityStrength = Math.min(mouseDist / MOUSE_MAX_DIST, 1);
+    const a = GRAVITY_ACCEL * gravityStrength * dt;
+    player.vx += Math.cos(gravityAngle) * a;
+    player.vy += Math.sin(gravityAngle) * a;
+  } else {
+    gravityStrength = 0;
+  }
+
+  // 2. Drag
+  player.vx *= DRAG;
+  player.vy *= DRAG;
+
+  // 3. Terminal velocity clamp (magnitude)
+  const speed = Math.hypot(player.vx, player.vy);
+  if (speed > TERMINAL_SPEED) {
+    const scale = TERMINAL_SPEED / speed;
+    player.vx *= scale;
+    player.vy *= scale;
+  }
+
+  // 4. Integrate position
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+
+  // 5. Wall boundaries
+  const pr = playerRadius(player.mass);
+  if (player.x - pr < 0)        { player.x = pr;            player.vx = 0; }
+  if (player.x + pr > WORLD_W)  { player.x = WORLD_W - pr;  player.vx = 0; }
+  if (player.y - pr < 0)        { player.y = pr;            player.vy = 0; }
+  if (player.y + pr > WORLD_H)  { player.y = WORLD_H - pr;  player.vy = 0; }
+
+  // 6. Collisions with static objects
+  const pSpeed = Math.hypot(player.vx, player.vy);
+  const energy = 0.5 * player.mass * pSpeed * pSpeed;
+
+  for (let i = objects.length - 1; i >= 0; i--) {
+    const obj = objects[i];
+    const dx = player.x - obj.x;
+    const dy = player.y - obj.y;
+    const dist = Math.hypot(dx, dy);
+    const minDist = pr + obj.radius;
+
+    if (dist < minDist) {
+      if (energy > obj.toughness) {
+        player.mass += obj.toughness / 50;
+        objects[i] = spawnObject();
+      } else {
+        resetPlayer();
+        return; // player died, skip remaining collisions
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function render() {
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // Camera offset: player centered on screen
+  const camX = player.x - w / 2;
+  const camY = player.y - h / 2;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#0a0a0f";
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.translate(-camX, -camY);
+
+  // Grid
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  const startCol = Math.floor(camX / GRID_SPACING);
+  const endCol = Math.ceil((camX + w) / GRID_SPACING);
+  const startRow = Math.floor(camY / GRID_SPACING);
+  const endRow = Math.ceil((camY + h) / GRID_SPACING);
+
+  ctx.beginPath();
+  for (let c = startCol; c <= endCol; c++) {
+    const lx = c * GRID_SPACING;
+    ctx.moveTo(lx, camY);
+    ctx.lineTo(lx, camY + h);
+  }
+  for (let r = startRow; r <= endRow; r++) {
+    const ly = r * GRID_SPACING;
+    ctx.moveTo(camX, ly);
+    ctx.lineTo(camX + w, ly);
+  }
+  ctx.stroke();
+
+  // World boundary
+  ctx.strokeStyle = "rgba(255,80,80,0.35)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
+
+  // Static objects (only visible ones)
+  for (const obj of objects) {
+    if (
+      obj.x + obj.radius < camX || obj.x - obj.radius > camX + w ||
+      obj.y + obj.radius < camY || obj.y - obj.radius > camY + h
+    ) continue;
+
+    ctx.beginPath();
+    ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI * 2);
+    ctx.fillStyle = toughnessColor(obj.toughness);
+    ctx.fill();
+  }
+
+  // Player
+  const pr = playerRadius(player.mass);
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, pr, 0, Math.PI * 2);
+  ctx.fillStyle = "#4488ff";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.3)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Direction indicator — triangle pointing toward gravity, sized by strength
+  if (gravityStrength > 0.01) {
+    const angle = gravityAngle;
+    const triSize = Math.max(6, pr * 0.45) * gravityStrength;
+    const tipDist = pr + triSize;
+    const tipX = player.x + Math.cos(angle) * tipDist;
+    const tipY = player.y + Math.sin(angle) * tipDist;
+    const baseX = player.x + Math.cos(angle) * (pr + 1);
+    const baseY = player.y + Math.sin(angle) * (pr + 1);
+    const perpX = -Math.sin(angle) * triSize * 0.5;
+    const perpY =  Math.cos(angle) * triSize * 0.5;
+
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(baseX + perpX, baseY + perpY);
+    ctx.lineTo(baseX - perpX, baseY - perpY);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(255,255,255,${0.3 + 0.5 * gravityStrength})`;
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  // HUD
+  const pSpeed = Math.hypot(player.vx, player.vy);
+  const energy = 0.5 * player.mass * pSpeed * pSpeed;
+
+  ctx.font = "14px 'Courier New', monospace";
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.textBaseline = "top";
+  ctx.fillText(`Mass:   ${player.mass.toFixed(1)}`, 16, 16);
+  ctx.fillText(`Speed:  ${pSpeed.toFixed(1)} px/s`, 16, 34);
+  ctx.fillText(`Energy: ${energy.toFixed(0)}`, 16, 52);
+}
+
+// ---------------------------------------------------------------------------
+// Main loop — fixed timestep physics, variable render
+// ---------------------------------------------------------------------------
+let accumulator = 0;
+let lastTime = 0;
+
+function frame(timestamp) {
+  const dtFrame = lastTime ? (timestamp - lastTime) / 1000 : 0;
+  lastTime = timestamp;
+
+  // Cap frame delta to avoid spiral of death after tab switch
+  accumulator += Math.min(dtFrame, 0.25);
+
+  while (accumulator >= PHYSICS_DT) {
+    update(PHYSICS_DT);
+    accumulator -= PHYSICS_DT;
+  }
+
+  render();
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

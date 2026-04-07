@@ -1,0 +1,12 @@
+client/node_modules
+client/dist
+client/*.tsbuildinfo
+api/.cache
+server/.cache
+.env
+.env.*
+.DS_Store
+*.log
+*.exe
+server/bin/
+api/bin/
