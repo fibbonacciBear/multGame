@@ -42,6 +42,7 @@ func main() {
 
 		srv.BeginDrain("server shutting down")
 		srv.WaitForDrain(drainCtx)
+		_ = srv.CleanupRegistry(drainCtx)
 		srv.CloseAllConnections()
 
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -9,6 +9,8 @@ import { startGameEngine } from "../engine";
 import type { MatchJoinResponse, SnapshotMessage } from "../engine/types";
 import { useGameStore } from "../store/gameStore";
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8081";
+
 type GameLocationState = {
   match?: MatchJoinResponse;
 };
@@ -21,6 +23,7 @@ export default function GamePage() {
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const connectionError = useGameStore((state) => state.connectionError);
   const serverNotice = useGameStore((state) => state.serverNotice);
+  const playerName = useGameStore((state) => state.playerName);
   const state = location.state as GameLocationState | null;
 
   useEffect(() => {
@@ -31,14 +34,28 @@ export default function GamePage() {
       return;
     }
 
-    const engine = startGameEngine(canvas, match);
+    const engine = startGameEngine(canvas, match, {
+      refreshMatch: async () => {
+        const response = await fetch(`${API_BASE_URL}/api/matchmaking/join`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ playerName, region: "local" }),
+        });
+        if (!response.ok) {
+          throw new Error("failed to refresh route");
+        }
+        return (await response.json()) as MatchJoinResponse;
+      },
+    });
     const stopWatching = engine.onSnapshot((next: SnapshotMessage) => setSnapshot(next));
 
     return () => {
       stopWatching();
       engine.dispose();
     };
-  }, [state]);
+  }, [playerName, state]);
 
   useEffect(() => {
     if (!state?.match && connectionStatus === "idle") {

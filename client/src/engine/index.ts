@@ -14,6 +14,9 @@ export type GameEngineHandle = {
 export function startGameEngine(
   canvas: HTMLCanvasElement,
   match: MatchJoinResponse,
+  options?: {
+    refreshMatch?: () => Promise<MatchJoinResponse>;
+  },
 ): GameEngineHandle {
   const ctx = canvas.getContext("2d");
   if (!ctx) {
@@ -32,7 +35,7 @@ export function startGameEngine(
   window.addEventListener("resize", resize);
 
   const input = new InputController(canvas);
-  const network = new NetworkClient(match);
+  const network = new NetworkClient(match, options?.refreshMatch);
   network.connect();
 
   let disposed = false;

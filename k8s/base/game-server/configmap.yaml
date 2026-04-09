@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: game-server-config
+data:
+  PORT: "8080"
+  API_SERVER_URL: "http://api-server:8081"
+  REDIS_ADDR: "redis:6379"
+  TICK_RATE: "60"
+  SNAPSHOT_RATE: "20"
+  MAX_PLAYERS: "10"
+  MATCH_DURATION: "5m"
+  RESPAWN_DELAY: "2s"
+  BOT_FILL_DELAY: "5s"
+  REGISTRY_HEARTBEAT_INTERVAL: "5s"
+  REGISTRY_HEARTBEAT_TTL: "10s"
+  LOBBY_TTL: "330s"
+  HEALTH_TICK_THRESHOLD: "2s"
+  SHUTDOWN_DRAIN_TIMEOUT: "320s"

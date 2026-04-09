@@ -19,10 +19,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -52,34 +54,50 @@ var palette = []string{
 }
 
 type Config struct {
-	Port                 string
-	JWTSecret            string
-	ReportSecret         string
-	APIServerURL         string
-	LobbyID              string
-	TickRate             int
-	SnapshotRate         int
-	MaxPlayers           int
-	MatchDuration        time.Duration
-	RespawnDelay         time.Duration
-	BotFillDelay         time.Duration
-	ShutdownDrainTimeout time.Duration
+	Port                      string
+	JWTSecret                 string
+	ReportSecret              string
+	APIServerURL              string
+	RedisAddr                 string
+	RedisPassword             string
+	RedisDB                   int
+	PodIP                     string
+	LobbyID                   string
+	TickRate                  int
+	SnapshotRate              int
+	MaxPlayers                int
+	MatchDuration             time.Duration
+	RespawnDelay              time.Duration
+	BotFillDelay              time.Duration
+	RegistryHeartbeatInterval time.Duration
+	RegistryHeartbeatTTL      time.Duration
+	LobbyTTL                  time.Duration
+	HealthTickThreshold       time.Duration
+	ShutdownDrainTimeout      time.Duration
 }
 
 func LoadConfig() Config {
 	return Config{
-		Port:                 envOrDefault("PORT", "8080"),
-		JWTSecret:            envOrDefault("JWT_SECRET", "dev-secret"),
-		ReportSecret:         envOrDefault("REPORT_SHARED_SECRET", envOrDefault("JWT_SECRET", "dev-secret")),
-		APIServerURL:         envOrDefault("API_SERVER_URL", "http://api-server:8081"),
-		LobbyID:              envOrDefault("LOBBY_ID", "local-lobby"),
-		TickRate:             envInt("TICK_RATE", 60),
-		SnapshotRate:         envInt("SNAPSHOT_RATE", 20),
-		MaxPlayers:           envInt("MAX_PLAYERS", 10),
-		MatchDuration:        envDuration("MATCH_DURATION", 5*time.Minute),
-		RespawnDelay:         envDuration("RESPAWN_DELAY", 2*time.Second),
-		BotFillDelay:         envDuration("BOT_FILL_DELAY", 5*time.Second),
-		ShutdownDrainTimeout: envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
+		Port:                      envOrDefault("PORT", "8080"),
+		JWTSecret:                 envOrDefault("JWT_SECRET", "dev-secret"),
+		ReportSecret:              envOrDefault("REPORT_SHARED_SECRET", envOrDefault("JWT_SECRET", "dev-secret")),
+		APIServerURL:              envOrDefault("API_SERVER_URL", "http://api-server:8081"),
+		RedisAddr:                 envOrDefault("REDIS_ADDR", "redis:6379"),
+		RedisPassword:             os.Getenv("REDIS_PASSWORD"),
+		RedisDB:                   envInt("REDIS_DB", 0),
+		PodIP:                     defaultPodIP(),
+		LobbyID:                   defaultLobbyID(),
+		TickRate:                  envInt("TICK_RATE", 60),
+		SnapshotRate:              envInt("SNAPSHOT_RATE", 20),
+		MaxPlayers:                envInt("MAX_PLAYERS", 10),
+		MatchDuration:             envDuration("MATCH_DURATION", 5*time.Minute),
+		RespawnDelay:              envDuration("RESPAWN_DELAY", 2*time.Second),
+		BotFillDelay:              envDuration("BOT_FILL_DELAY", 5*time.Second),
+		RegistryHeartbeatInterval: envDuration("REGISTRY_HEARTBEAT_INTERVAL", 5*time.Second),
+		RegistryHeartbeatTTL:      registryHeartbeatTTL(),
+		LobbyTTL:                  envDuration("LOBBY_TTL", 330*time.Second),
+		HealthTickThreshold:       envDuration("HEALTH_TICK_THRESHOLD", 2*time.Second),
+		ShutdownDrainTimeout:      envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
 	}
 }
 
@@ -94,6 +112,8 @@ type Server struct {
 
 	rng        *mathrand.Rand
 	httpClient *http.Client
+	redis      *redis.Client
+	lastTickAt atomic.Int64
 }
 
 type Lobby struct {
@@ -178,7 +198,8 @@ type KillFeedEntry struct {
 
 type matchClaims struct {
 	PlayerName string `json:"name"`
-	LobbyID    string `json:"lobbyId"`
+	LobbyID    string `json:"lobby_id"`
+	PodIP      string `json:"pod_ip"`
 	jwt.RegisteredClaims
 }
 
@@ -279,7 +300,7 @@ type leaderboardPlayerHit struct {
 func NewServer(cfg Config, logger *log.Logger) *Server {
 	now := time.Now()
 
-	return &Server{
+	server := &Server{
 		cfg:    cfg,
 		logger: logger,
 		upgrader: websocket.Upgrader{
@@ -296,6 +317,9 @@ func NewServer(cfg Config, logger *log.Logger) *Server {
 		rng:        mathrand.New(mathrand.NewSource(time.Now().UnixNano())),
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
+	server.initRegistryClient()
+	server.lastTickAt.Store(now.UnixNano())
+	return server
 }
 
 func (s *Server) Start(ctx context.Context) {
@@ -305,6 +329,7 @@ func (s *Server) Start(ctx context.Context) {
 	}
 	s.mu.Unlock()
 
+	go s.startRegistryLoop(ctx)
 	go s.loop(ctx)
 }
 
@@ -327,6 +352,10 @@ func (s *Server) loop(ctx context.Context) {
 }
 
 func (s *Server) HandleHealthz(w http.ResponseWriter, _ *http.Request) {
+	if age := s.tickAge(time.Now()); age > s.cfg.HealthTickThreshold {
+		http.Error(w, "game loop unhealthy", http.StatusServiceUnavailable)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
 }
@@ -373,7 +402,11 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	tokenString := r.URL.Query().Get("token")
-	claims, err := s.parseToken(tokenString)
+	lobbyID := r.URL.Query().Get("lobby")
+	if lobbyID == "" {
+		lobbyID = s.cfg.LobbyID
+	}
+	claims, err := s.parseToken(tokenString, lobbyID)
 	if err != nil {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
@@ -417,6 +450,8 @@ func (s *Server) BeginDrain(message string) {
 	s.draining = true
 	connections := s.currentConnectionsLocked()
 	s.mu.Unlock()
+
+	_ = s.markDraining(context.Background())
 
 	for _, connection := range connections {
 		_ = connection.writeJSON(serverNoticeMessage{
@@ -489,6 +524,7 @@ func (s *Server) readLoop(connection *ClientConnection) {
 }
 
 func (s *Server) step(now time.Time) {
+	s.tickHealth(now)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1158,7 +1194,7 @@ func buildSelfState(player *Player, now time.Time) *selfState {
 	}
 }
 
-func (s *Server) parseToken(tokenString string) (*matchClaims, error) {
+func (s *Server) parseToken(tokenString, expectedLobby string) (*matchClaims, error) {
 	claims := &matchClaims{}
 	_, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		return []byte(s.cfg.JWTSecret), nil
@@ -1166,8 +1202,11 @@ func (s *Server) parseToken(tokenString string) (*matchClaims, error) {
 	if err != nil {
 		return nil, err
 	}
-	if claims.LobbyID != s.cfg.LobbyID {
+	if claims.LobbyID != expectedLobby {
 		return nil, fmt.Errorf("unexpected lobby")
+	}
+	if claims.PodIP != "" && s.cfg.PodIP != "" && claims.PodIP != s.cfg.PodIP {
+		return nil, fmt.Errorf("unexpected pod")
 	}
 	return claims, nil
 }

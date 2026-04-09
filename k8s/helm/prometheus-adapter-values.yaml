@@ -1,0 +1,17 @@
+prometheus:
+  url: http://kube-prometheus-stack-prometheus.default.svc
+  port: 9090
+rules:
+  default: false
+  custom:
+    - seriesQuery: 'active_players_per_pod'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        matches: "active_players_per_pod"
+        as: "active_players_per_pod"
+      metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'

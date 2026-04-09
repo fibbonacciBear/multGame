@@ -21,18 +21,20 @@ function getTokenExpiryMs(token: string): number | undefined {
 }
 
 export class NetworkClient {
-  private readonly match: MatchJoinResponse;
-  private readonly tokenExpiryMs?: number;
+  private tokenExpiryMs?: number;
+  private match: MatchJoinResponse;
   private readonly snapshotListeners = new Set<SnapshotListener>();
+  private readonly refreshMatch?: () => Promise<MatchJoinResponse>;
   private socket?: WebSocket;
   private snapshotBuffer: SnapshotMessage[] = [];
   private disposed = false;
   private reconnectTimer?: number;
   private reconnectAttempts = 0;
 
-  constructor(match: MatchJoinResponse) {
+  constructor(match: MatchJoinResponse, refreshMatch?: () => Promise<MatchJoinResponse>) {
     this.match = match;
     this.tokenExpiryMs = getTokenExpiryMs(match.token);
+    this.refreshMatch = refreshMatch;
   }
 
   connect() {
@@ -52,11 +54,7 @@ export class NetworkClient {
 
     useGameStore.getState().setConnectionStatus("connecting");
 
-    const url = new URL(this.match.wsUrl);
-    url.searchParams.set("token", this.match.token);
-    url.searchParams.set("lobby", this.match.lobbyId);
-
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(this.match.wsUrl);
     this.socket = socket;
 
     socket.addEventListener("open", () => {
@@ -101,12 +99,18 @@ export class NetworkClient {
       }
     });
 
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", async (event) => {
       if (this.socket !== socket || this.disposed) {
         return;
       }
 
       this.socket = undefined;
+      if (this.shouldRematch()) {
+        const refreshed = await this.tryRefreshMatch();
+        if (refreshed) {
+          return;
+        }
+      }
       useGameStore
         .getState()
         .setConnectionStatus("connecting", "Connection lost, retrying...");
@@ -141,6 +145,29 @@ export class NetworkClient {
       this.reconnectTimer = undefined;
       this.openSocket();
     }, delayMs);
+  }
+
+  private shouldRematch() {
+    return this.refreshMatch !== undefined && this.match.wsUrl.includes("/ws/");
+  }
+
+  private async tryRefreshMatch() {
+    if (!this.refreshMatch) {
+      return false;
+    }
+
+    useGameStore.getState().setConnectionStatus("connecting", "Refreshing match route...");
+    try {
+      this.match = await this.refreshMatch();
+      this.tokenExpiryMs = getTokenExpiryMs(this.match.token);
+      this.reconnectAttempts = 0;
+      this.snapshotBuffer = [];
+      this.openSocket();
+      return true;
+    } catch {
+      this.failReconnect("Unable to refresh route, return to menu.");
+      return false;
+    }
   }
 
   private hasReconnectExpired() {

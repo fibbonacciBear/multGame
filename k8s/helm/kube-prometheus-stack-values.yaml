@@ -1,0 +1,12 @@
+grafana:
+  enabled: false
+alertmanager:
+  enabled: false
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+kube-state-metrics:
+  enabled: true
+prometheus-node-exporter:
+  enabled: true

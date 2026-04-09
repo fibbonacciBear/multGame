@@ -60,12 +60,15 @@ multGame/
     internal/
       matchmaking/       # Find/assign lobby, session registry
       leaderboard/       # Score storage, read APIs
+      registry/          # Pod registry cleanup goroutine
+    Dockerfile
+  ws-router/             # WebSocket routing proxy (Phase 2+)
+    cmd/router/main.go   # JWT validation, Redis lookup, WS proxy
     Dockerfile
   k8s/                   # Kubernetes manifests
     base/                # Kustomize base (all environments share)
     overlays/
       dev/               # Local dev overrides (fewer replicas, debug)
-      staging/
       prod/              # Production overrides (HPA, PDB, resources)
     helm/                # Optional Helm chart alternative
   .github/
@@ -84,37 +87,79 @@ flowchart TD
     Ingress[Ingress Controller]
     Ingress -->|"/api/*"| API["api-server Deployment"]
     Ingress -->|"/"| WebClient["web-client Deployment (nginx)"]
-    API --> Redis[(Redis)]
-    GameServer["game-server Pods (pool)"] --> Redis
+    Ingress -->|"/ws/*"| WSRouter["ws-router Deployment"]
+    WSRouter -->|"proxy to pod IP (from JWT claims)"| GameServer["game-server Pods (pool)"]
+    API --> Redis[(Redis + PVC)]
+    GameServer -->|"registry heartbeat"| Redis
   end
   Player([Player Browser]) --> Ingress
-  Player -->|"direct WebSocket via pod IP/NodePort"| GameServer
 ```
 
-Three deployables plus Redis:
+Four deployables plus Redis:
 
-- **game-server** -- Go binary. Runs authoritative game loops. One pod can host multiple lobbies. Exposes `/ws` for player connections and `/healthz`, `/readyz`, `/metrics` endpoints.
-- **api-server** -- Go binary. Handles matchmaking (assigns players to a game-server pod + lobby) and leaderboard reads/writes. Stateless.
+- **game-server** -- Go binary. Runs authoritative game loops. One pod can host multiple lobbies. Exposes `/ws` for player connections and `/healthz`, `/readyz`, `/metrics` endpoints. Registers itself and its lobbies in Redis (see Pod Registry Lifecycle).
+- **api-server** -- Go binary. Handles matchmaking (assigns players to a game-server pod + lobby) and leaderboard reads/writes. Runs background registry cleanup goroutine. Stateless otherwise.
+- **ws-router** -- Small Go binary (~150 LOC). Receives WebSocket connections from Ingress at `/ws/{token}`, validates the JWT, reads `pod_ip` + `lobby_id` from claims, and proxies the connection to the owning game-server pod. No Redis dependency — routing is fully derived from the signed JWT. Stateless. (Introduced in Phase 2; not needed in Phase 1 Docker Compose.)
 - **web-client** -- nginx container serving the Vite-built React app.
-- **Redis** -- Session registry (which lobbies exist on which pods), leaderboard sorted sets, matchmaking queue.
+- **Redis** -- Pod registry, lobby ownership, leaderboard sorted sets. Deployed as a single-instance Deployment with PVC (see Redis Deployment section).
 
-### WebSocket Routing Strategy
+### WebSocket Routing Strategy (Locked)
 
 Clients must connect to the **specific** game-server pod that owns their lobby. Generic Ingress round-robin would route to the wrong pod.
+
+**Chosen approach: Token-aware WebSocket router behind Ingress.**
+
+All WebSocket traffic flows through a single Ingress path (`/ws/{token}`). The API server issues a short-lived JWT whose claims carry the target `pod_ip` and `lobby_id` — the token is the sole source of truth for routing. The game-server Deployment sits behind a normal ClusterIP Service. A lightweight **ws-router** standalone Deployment (a small Go binary) receives incoming `/ws/{token}` connections, validates the JWT signature, reads `pod_ip` and `lobby_id` from its claims, and proxies the WebSocket directly to that pod's cluster-internal address. No Redis lookup at routing time.
+
+**Why this approach over direct pod routing:**
+- Works identically in k3d and production -- no per-pod NodePorts, no external DNS for individual pods.
+- Single Ingress entry point; TLS terminates once.
+- Demonstrates a real routing pattern (token -> JWT validation -> proxy) without requiring StatefulSet or headless Service complexity for game-server.
+- Easier to reason about firewall rules, load balancer config, and cost.
 
 **How it works:**
 
 1. Client calls `POST /api/matchmaking/join` with player name.
-2. API server looks up available lobbies in Redis. Each lobby entry stores the pod's direct address (e.g., `ws://game-server-pod-2.game-server.game-ns.svc.cluster.local:8080/ws?lobby=abc123`).
-3. API returns `{ wsUrl: "<direct pod address>", lobbyId: "abc123", token: "<short-lived JWT>" }`.
-4. Client opens a WebSocket directly to that URL. The token prevents unauthorized connections.
+2. API server looks up available lobbies in Redis. Each lobby entry stores the owning pod's cluster-internal IP and port.
+3. API returns `{ wsUrl: "wss://<domain>/ws/<token>", lobbyId: "abc123", token: "<short-lived JWT>" }`.
+4. Client connects to the single Ingress endpoint. Ingress routes `/ws/*` to the ws-router service.
+5. ws-router validates the JWT signature, reads `pod_ip` and `lobby_id` from claims, and proxies the WebSocket connection to `http://<pod-ip>:8080/ws?lobby=abc123`. No Redis call at routing time — the JWT is self-contained.
 
-**In Kubernetes, this requires:**
-- A **headless Service** (`clusterIP: None`) for game-server, so each pod gets a stable DNS name (e.g., `game-server-0.game-server.game-ns.svc.cluster.local`).
-- Using a **StatefulSet** instead of a Deployment for game-server, giving pods predictable ordinal names.
-- For external access (production), each game-server pod gets a dedicated **NodePort** or the Ingress is configured with session-affinity annotations. Alternatively, the API server returns a session token and the Ingress routes `/ws/{token}` to the correct pod using a small routing table in Redis.
+**ws-router implementation:**
+- Small Go binary (~150 LOC): HTTP server, JWT validation, `net/http/httputil.ReverseProxy` with WebSocket support. No Redis dependency — routing is fully derived from JWT claims.
+- Deployed as a Deployment (2 replicas for availability) with its own ClusterIP Service.
+- Stateless — needs only the JWT signing key (shared via Secret with api-server).
 
-**MVP simplification:** In Phase 1 (Docker Compose, single game-server instance), this is trivial -- the API just returns `ws://localhost:8080/ws?lobby=abc123`. The multi-pod routing only matters starting in Phase 2.
+**Phase 1 simplification:** In Docker Compose with a single game-server instance, the ws-router is unnecessary. The API returns `ws://localhost:8080/ws?lobby=abc123&token=<jwt>` directly. The ws-router is introduced in Phase 2.
+
+### Pod Registry Lifecycle (Locked)
+
+The multi-pod setup requires Redis to always know which pod owns which lobby. This is the registry contract:
+
+**Pod registration (on startup):**
+- Each game-server pod registers itself in Redis on boot: `HSET pod:registry <pod-ip> '{"ip":"...","port":8080,"state":"ready","lobbies":0}'`.
+- Registration includes a TTL-backed heartbeat key: `SET pod:heartbeat:<pod-ip> 1 EX 10`.
+
+**Heartbeat (every 5s):**
+- Each pod refreshes its heartbeat key: `SET pod:heartbeat:<pod-ip> 1 EX 10`.
+- If a pod crashes without cleanup, the heartbeat key expires in 10s.
+
+**Lobby ownership:**
+- When a pod creates a lobby: `HSET lobby:<lobby-id> pod_ip <pod-ip>` with a TTL matching the max match duration + buffer (330s).
+- The matchmaking API reads `HGET lobby:<lobby-id> pod_ip` to resolve the owning pod for a join request.
+
+**Drain state (on SIGTERM / scale-down):**
+- Pod sets its registry state to `"draining"`: `HSET pod:registry <pod-ip> '{"state":"draining",...}'`.
+- Matchmaking API skips pods in `"draining"` state when assigning new players.
+- Pod continues serving existing matches until they finish or the termination deadline hits.
+
+**Cleanup (on shutdown or crash):**
+- **Graceful:** Pod deletes its registry entry and all its lobby keys on clean exit.
+- **Crash:** A background goroutine in the API server (or a Kubernetes CronJob) scans `pod:registry` entries whose `pod:heartbeat:<ip>` key has expired. It removes the stale registry entry and any lobby keys pointing at the dead pod. Scan interval: 15s.
+
+**Consistency guarantee:** Stale `wsUrl` values are bounded by the heartbeat TTL (10s) + scan interval (15s) = 25s worst case.
+
+**Failure contract for stale routing:** If ws-router cannot dial the backend pod (connection refused, timeout after 3s), it responds with **HTTP 502** before the WebSocket upgrade completes. If the backend pod dies after the WebSocket is established, ws-router closes the client connection with **WebSocket close code 4001** and reason `"pod_unavailable"`. The client treats both cases identically: display a brief "reconnecting..." message, then call `POST /api/matchmaking/join` to get a fresh token and reconnect. The client does not attempt blind reconnection to the same `wsUrl`.
 
 ## Phase 1: Core Game (Local, No K8s Yet)
 
@@ -156,7 +201,7 @@ React manages all UI; a plain TypeScript game engine module manages the canvas.
 
 ### API Server
 
-- `POST /api/matchmaking/join` -- accepts `{playerName}`, returns `{wsUrl, lobbyId, token}`. The `wsUrl` points directly at the owning game-server pod (see WebSocket Routing Strategy). The `token` is a short-lived JWT for auth on connect.
+- `POST /api/matchmaking/join` -- accepts `{playerName}`, returns `{wsUrl, lobbyId, token}`. In Phase 1 (single instance), `wsUrl` points directly at the game-server. In Phase 2+, `wsUrl` is `wss://<domain>/ws/<token>` — the client connects to the Ingress and ws-router resolves the target pod from JWT claims (see WebSocket Routing Strategy). The `token` is a short-lived JWT carrying `pod_ip` and `lobby_id`.
 - `GET /api/leaderboard` -- returns top N scores. Each entry: `{playerName, kills, massBonus, totalScore}`.
 - `POST /api/leaderboard/report` -- called by game-server at match end. Payload: `{lobbyId, results: [{playerId, playerName, kills, finalMass}]}`. API server computes `totalScore = kills + floor(finalMass / 50)` and updates Redis sorted set.
 
@@ -175,19 +220,46 @@ React manages all UI; a plain TypeScript game engine module manages the canvas.
 
 ### Manifests (Kustomize)
 
-- **Base** manifests for each Deployment, Service, ConfigMap
-- **Overlays** for dev (1 replica, no resource limits) and prod (HPA, PDB, tight limits)
-- Namespace isolation: `game-dev`, `game-staging`, `game-prod`
+- **Base** manifests for each Deployment/Service/ConfigMap: game-server, api-server, web-client, ws-router, Redis (see below)
+- **Overlays** for dev (1 replica, no resource limits, k3d-compatible) and prod (HPA, PDB, tight resource limits)
+- Namespace isolation: `game-dev`, `game-prod` (staging deferred until CI/CD lands in Phase 3; adding it earlier would be an untested overlay with no pipeline to exercise it)
 
 ### Key K8s Features to Demonstrate
 
 1. **Custom Metrics HPA** -- Scale game-server pods based on `active_players_per_pod` (exported via Prometheus). More impressive than CPU-based scaling.
-2. **Pod Disruption Budget** -- Ensure at least N game-server pods stay up during rolling updates so active matches aren't killed.
-3. **Graceful Shutdown / PreStop Hook** -- Game server handles SIGTERM by draining: stops accepting new players, lets current match finish (up to a deadline), then exits. Set `terminationGracePeriodSeconds` accordingly.
-4. **Readiness vs Liveness Probes** -- Readiness: "I have capacity for more players." Liveness: "My game loop is not stuck." This distinction matters for game servers.
+2. **Pod Disruption Budget** -- Ensure at least N game-server pods stay up during rolling updates so active matches aren't killed. `minAvailable: 1` for dev, `minAvailable: 2` for prod.
+3. **Graceful Shutdown / PreStop Hook** -- Concrete policy:
+   - On SIGTERM, the game-server sets its pod registry state to `"draining"` (see Pod Registry Lifecycle) and stops accepting new WebSocket connections.
+   - Active matches continue running until they finish naturally (max 300s = 5 min match) or are force-terminated.
+   - **`terminationGracePeriodSeconds: 330`** (300s match + 30s buffer for final score reporting and cleanup).
+   - If a match is still running when the 330s deadline hits, the server broadcasts a "server shutting down" message and exits. Clients see a disconnect, not a hang.
+   - **Rolling update interaction:** `maxUnavailable: 0`, `maxSurge: 1`. New pods come up and become ready before old pods receive SIGTERM. Combined with PDB, this ensures zero active-match disruption during deploys.
+   - **HPA scale-down interaction:** HPA targets game-server pods. When scaling down, Kubernetes picks a pod to terminate and sends SIGTERM. The 330s grace period means scale-down is slow but safe — the pod drains its matches before exiting. The HPA controller itself cannot call application-level drain endpoints; if faster drain is needed in the future, that requires a custom controller or operator (Phase 6 stretch goal). For MVP, SIGTERM + long grace period is sufficient.
+4. **Readiness vs Liveness Probes** -- This distinction matters for game servers:
+   - **Readiness (`/readyz`):** Returns 200 when the pod has capacity for more players AND is not in drain state. Returns 503 when full or draining. The primary effect is on **matchmaking**: the API server checks Redis registry state (`"ready"` vs `"draining"`/`"full"`) when assigning players, so an unready pod stops receiving new lobby assignments. Kubernetes endpoint removal is a secondary benefit — it prevents the pod from receiving traffic through the game-server ClusterIP Service, but ws-router does not use that Service (it dials pod IPs from JWT claims). Readiness matters most as an input signal to the registry state machine.
+   - **Liveness (`/healthz`):** Returns 200 when the game loop is healthy. **Implementation contract:** the game-server main loop writes a `lastTickAt` timestamp (monotonic clock) on every simulation tick. The `/healthz` handler checks `time.Since(lastTickAt) < 2s`. If the loop is stuck (deadlock, infinite loop, GC pause), the tick age exceeds the threshold and liveness fails, triggering a pod restart. This is distinct from "HTTP server is alive" -- a hung game loop with a responsive HTTP listener will still fail liveness.
+   - **Probe config:** `initialDelaySeconds: 5`, `periodSeconds: 5`, `failureThreshold: 3` (liveness), `failureThreshold: 1` (readiness).
 5. **Resource Requests/Limits** -- Meaningful for a CPU-bound physics loop. Profile and set appropriate values.
 6. **ConfigMaps / Secrets** -- Game tuning parameters (world size, max players, tick rate) as ConfigMaps. Redis credentials as Secrets.
-7. **Ingress** with path-based routing for API and web-client. Game-server uses headless Service + StatefulSet for direct pod addressing (see WebSocket Routing Strategy above).
+7. **Ingress** with path-based routing: `/api/*` -> api-server, `/ws/*` -> ws-router, `/` -> web-client (see WebSocket Routing Strategy above). Game-server pods are not directly exposed via Ingress.
+
+### Redis Deployment (Phase 2 Deliverable)
+
+Redis is required infrastructure in Phase 2 -- matchmaking, lobby registry (pod heartbeats + lobby ownership), and leaderboard all depend on it. ws-router does not use Redis (routing is JWT-based). It is not implied; it ships as part of the Phase 2 manifests.
+
+**Deployment model:** Single-instance Redis deployed as a **Deployment** (1 replica) with a **PersistentVolumeClaim** for AOF/RDB persistence. Not a StatefulSet -- at this scale a single Redis with a PVC is sufficient and simpler.
+
+- **Dev overlay (k3d):** `hostPath` PV or k3d's built-in local-path provisioner. No resource limits.
+- **Prod overlay (k3s on VPS):** `local-path` PV backed by host disk. Resource requests: 64Mi memory, 50m CPU. Limits: 128Mi memory, 200m CPU.
+- **No Redis Sentinel/Cluster** in MVP. Single-node Redis is a SPOF, which is acceptable for a portfolio project (documented in Phase 5 "Reliability Expectations").
+
+**Manifests to create:**
+- `k8s/base/redis/deployment.yaml` -- Redis 7.4-alpine, port 6379, liveness probe (`redis-cli ping`), volume mount for `/data`.
+- `k8s/base/redis/service.yaml` -- ClusterIP Service on port 6379.
+- `k8s/base/redis/pvc.yaml` -- 1Gi PVC for persistence.
+- `k8s/base/redis/configmap.yaml` -- Redis config: `appendonly yes`, `maxmemory 100mb`, `maxmemory-policy allkeys-lru`.
+
+**k3d parity:** The same manifests work in k3d and prod. The only overlay difference is the PV provisioner and resource limits.
 
 ### Minimal Metrics Stack (Required for HPA)
 
@@ -222,7 +294,7 @@ Use **ArgoCD** with **ArgoCD Image Updater**:
 
 - ArgoCD watches the `k8s/` directory in this repo and syncs manifests to the cluster.
 - ArgoCD Image Updater watches ghcr.io for new image tags matching a semver or SHA pattern. When a new image is pushed by CI, Image Updater automatically updates the live deployment -- no commit back to the repo needed, avoiding CI/CD trigger loops.
-- Kustomize overlays pin image tags for each environment. For prod, Image Updater manages the tag. For dev/staging, tags are updated manually or by CI writing to a separate `env-config` branch.
+- Kustomize overlays pin image tags for each environment. For prod, Image Updater manages the tag. For dev, tags are updated manually or by CI writing to a separate `env-config` branch. A staging overlay can be added alongside the staging namespace when CI/CD is proven.
 
 This avoids the common pitfall where CI commits a tag bump to the repo, which triggers another CI run, which commits another tag bump, etc. Image Updater breaks the loop by operating outside of git.
 

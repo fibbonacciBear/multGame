@@ -25,15 +25,17 @@ import (
 const leaderboardIndexKey = "leaderboard:index"
 
 type Config struct {
-	Port            string
-	RedisAddr       string
-	RedisPassword   string
-	RedisDB         int
-	JWTSecret       string
-	ReportSecret    string
-	PublicGameWSURL string
-	LobbyID         string
-	TokenTTL        time.Duration
+	Port                    string
+	RedisAddr               string
+	RedisPassword           string
+	RedisDB                 int
+	JWTSecret               string
+	ReportSecret            string
+	WSRouterBaseURL         string
+	PublicGameWSURL         string
+	LobbyID                 string
+	TokenTTL                time.Duration
+	RegistryCleanupInterval time.Duration
 }
 
 type Server struct {
@@ -63,15 +65,17 @@ type leaderboardReportEntry struct {
 
 func LoadConfig() Config {
 	return Config{
-		Port:            envOrDefault("PORT", "8081"),
-		RedisAddr:       envOrDefault("REDIS_ADDR", "redis:6379"),
-		RedisPassword:   os.Getenv("REDIS_PASSWORD"),
-		RedisDB:         envInt("REDIS_DB", 0),
-		JWTSecret:       envOrDefault("JWT_SECRET", "dev-secret"),
-		ReportSecret:    envOrDefault("REPORT_SHARED_SECRET", envOrDefault("JWT_SECRET", "dev-secret")),
-		PublicGameWSURL: envOrDefault("PUBLIC_GAME_WS_URL", "ws://localhost:8080/ws"),
-		LobbyID:         envOrDefault("LOBBY_ID", "local-lobby"),
-		TokenTTL:        envDuration("TOKEN_TTL", 10*time.Minute),
+		Port:                    envOrDefault("PORT", "8081"),
+		RedisAddr:               envOrDefault("REDIS_ADDR", "redis:6379"),
+		RedisPassword:           os.Getenv("REDIS_PASSWORD"),
+		RedisDB:                 envInt("REDIS_DB", 0),
+		JWTSecret:               envOrDefault("JWT_SECRET", "dev-secret"),
+		ReportSecret:            envOrDefault("REPORT_SHARED_SECRET", envOrDefault("JWT_SECRET", "dev-secret")),
+		WSRouterBaseURL:         envOrDefault("WS_ROUTER_BASE_URL", ""),
+		PublicGameWSURL:         envOrDefault("PUBLIC_GAME_WS_URL", "ws://localhost:8080/ws"),
+		LobbyID:                 envOrDefault("LOBBY_ID", "local-lobby"),
+		TokenTTL:                envDuration("TOKEN_TTL", 10*time.Minute),
+		RegistryCleanupInterval: envDuration("REGISTRY_CLEANUP_INTERVAL", 15*time.Second),
 	}
 }
 
@@ -86,11 +90,13 @@ func NewServer(ctx context.Context, cfg Config, logger *log.Logger) (*Server, er
 		return nil, err
 	}
 
-	return &Server{
+	server := &Server{
 		cfg:    cfg,
 		logger: logger,
 		redis:  client,
-	}, nil
+	}
+	go server.startRegistryCleanup(ctx)
+	return server, nil
 }
 
 func (s *Server) WithCORS(next http.Handler) http.Handler {
@@ -128,13 +134,19 @@ func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	playerName := sanitizeName(payload.PlayerName)
 	playerID := randomID("player")
 	now := time.Now()
+	assignment, err := s.selectLobbyAssignment(r.Context())
+	if err != nil {
+		http.Error(w, "game servers starting up, retry in a few seconds", http.StatusServiceUnavailable)
+		return
+	}
 
 	claims := jwt.MapClaims{
-		"sub":     playerID,
-		"name":    playerName,
-		"lobbyId": s.cfg.LobbyID,
-		"exp":     now.Add(s.cfg.TokenTTL).Unix(),
-		"iat":     now.Unix(),
+		"sub":      playerID,
+		"name":     playerName,
+		"lobby_id": assignment.LobbyID,
+		"pod_ip":   assignment.PodIP,
+		"exp":      now.Add(s.cfg.TokenTTL).Unix(),
+		"iat":      now.Unix(),
 	}
 
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(s.cfg.JWTSecret))
@@ -143,9 +155,10 @@ func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wsURL := buildWSURL(s.cfg, assignment.LobbyID, token)
 	writeJSON(w, http.StatusOK, map[string]string{
-		"wsUrl":   s.cfg.PublicGameWSURL,
-		"lobbyId": s.cfg.LobbyID,
+		"wsUrl":   wsURL,
+		"lobbyId": assignment.LobbyID,
 		"token":   token,
 	})
 }
