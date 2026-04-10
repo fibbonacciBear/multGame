@@ -495,8 +495,10 @@ func (s *Server) readLoop(connection *ClientConnection) {
 	defer func() {
 		s.mu.Lock()
 		if player, ok := s.lobby.Players[connection.PlayerID]; ok {
-			player.Connected = false
-			player.Connection = nil
+			if player.Connection == connection {
+				player.Connected = false
+				player.Connection = nil
+			}
 		}
 		s.mu.Unlock()
 		_ = connection.Socket.Close()
@@ -576,7 +578,7 @@ func (s *Server) broadcastSnapshots(now time.Time) {
 		Players:         s.snapshotPlayersLocked(now),
 		Objects:         append([]*Collectible(nil), s.lobby.Objects...),
 		Projectiles:     s.snapshotProjectilesLocked(),
-		KillFeed:        append([]KillFeedEntry(nil), s.lobby.KillFeed...),
+		KillFeed:        append([]KillFeedEntry{}, s.lobby.KillFeed...),
 		Scoreboard:      scoreboard,
 	}
 	serverNotice := ""
@@ -1084,7 +1086,7 @@ func (s *Server) resetMatchLocked(now time.Time) {
 	s.lobby.MatchEnds = now.Add(s.cfg.MatchDuration)
 	s.lobby.MatchOver = false
 	s.lobby.Projectiles = nil
-	s.lobby.KillFeed = nil
+	s.lobby.KillFeed = s.lobby.KillFeed[:0]
 	s.spawnObjectsLocked()
 
 	for id, player := range s.lobby.Players {

@@ -84,6 +84,12 @@ export class NetworkClient {
       }
 
       if (message.type === "snapshot") {
+        if (!message.killFeed) message.killFeed = [];
+        if (!message.scoreboard) message.scoreboard = [];
+        if (!message.players) message.players = [];
+        if (!message.projectiles) message.projectiles = [];
+        if (!message.objects) message.objects = [];
+
         this.snapshotBuffer = [...this.snapshotBuffer.slice(-1), message];
         useGameStore.getState().setSnapshotState({
           matchTimerMs: message.timeRemainingMs,
