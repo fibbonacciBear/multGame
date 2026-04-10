@@ -101,7 +101,12 @@ export default function MainMenu() {
               <h3>Join the local arena</h3>
             </div>
           </div>
-          <form className="form-stack" onSubmit={handleSubmit}>
+          <form
+            className="form-stack"
+            onSubmit={(event) => {
+              void handleSubmit(event);
+            }}
+          >
             <label className="stack">
               <span>Name</span>
               <input

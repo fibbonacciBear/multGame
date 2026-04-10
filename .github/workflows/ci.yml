@@ -1,0 +1,83 @@
+name: ci
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [server, api, ws-router]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          working-directory: ${{ matrix.module }}
+      - name: Test
+        run: go test ./...
+
+  client-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm run test
+      - name: Build
+        run: npm run build
+
+  manifest-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+      - name: Render dev overlay
+        run: kubectl kustomize k8s/overlays/dev
+      - name: Render prod overlay
+        run: kubectl kustomize k8s/overlays/prod
+      - name: Render dev monitoring overlay
+        run: kubectl kustomize k8s/overlays/dev-monitoring
+
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: game-server
+            context: ./server
+          - image: api-server
+            context: ./api
+          - image: ws-router
+            context: ./ws-router
+          - image: web-client
+            context: ./client
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t local/${{ matrix.image }}:pr-${{ github.event.pull_request.number }} ${{ matrix.context }}

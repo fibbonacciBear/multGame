@@ -20,6 +20,10 @@ function getTokenExpiryMs(token: string): number | undefined {
   }
 }
 
+function parseServerMessage(data: string): ServerMessage {
+  return JSON.parse(data) as ServerMessage;
+}
+
 export class NetworkClient {
   private tokenExpiryMs?: number;
   private match: MatchJoinResponse;
@@ -71,7 +75,11 @@ export class NetworkClient {
         return;
       }
 
-      const message = JSON.parse(event.data) as ServerMessage;
+      if (typeof event.data !== "string") {
+        return;
+      }
+
+      const message = parseServerMessage(event.data);
 
       if (message.type === "welcome") {
         useGameStore.getState().setLocalPlayerId(message.playerId);
@@ -105,22 +113,12 @@ export class NetworkClient {
       }
     });
 
-    socket.addEventListener("close", async (event) => {
+    socket.addEventListener("close", () => {
       if (this.socket !== socket || this.disposed) {
         return;
       }
 
-      this.socket = undefined;
-      if (this.shouldRematch()) {
-        const refreshed = await this.tryRefreshMatch();
-        if (refreshed) {
-          return;
-        }
-      }
-      useGameStore
-        .getState()
-        .setConnectionStatus("connecting", "Connection lost, retrying...");
-      this.scheduleReconnect();
+      void this.handleClose(socket);
     });
 
     socket.addEventListener("error", () => {
@@ -132,6 +130,22 @@ export class NetworkClient {
         .getState()
         .setConnectionStatus("connecting", "Socket error, retrying...");
     });
+  }
+
+  private async handleClose(socket: WebSocket) {
+    if (this.socket !== socket || this.disposed) {
+      return;
+    }
+
+    this.socket = undefined;
+    if (this.shouldRematch()) {
+      const refreshed = await this.tryRefreshMatch();
+      if (refreshed) {
+        return;
+      }
+    }
+    useGameStore.getState().setConnectionStatus("connecting", "Connection lost, retrying...");
+    this.scheduleReconnect();
   }
 
   private scheduleReconnect() {
