@@ -547,6 +547,8 @@ func (s *Server) step(now time.Time) {
 			go s.reportLeaderboard(s.scoreboardLocked())
 		}
 		s.handleRespawnsLocked(now)
+	} else if !s.draining && !s.hasConnectedHumansLocked() {
+		s.resetMatchLocked(now)
 	}
 }
 
@@ -902,6 +904,15 @@ func (s *Server) currentConnectionsLocked() []*ClientConnection {
 		}
 	}
 	return connections
+}
+
+func (s *Server) hasConnectedHumansLocked() bool {
+	for _, player := range s.lobby.Players {
+		if !player.IsBot && player.Connected {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) activeSlotsLocked() int {

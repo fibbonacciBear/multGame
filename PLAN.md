@@ -63,7 +63,7 @@ multGame/
       registry/          # Pod registry cleanup goroutine
     Dockerfile
   ws-router/             # WebSocket routing proxy (Phase 2+)
-    cmd/router/main.go   # JWT validation, Redis lookup, WS proxy
+    cmd/router/main.go   # JWT validation, WS proxy (no Redis at routing time)
     Dockerfile
   k8s/                   # Kubernetes manifests
     base/                # Kustomize base (all environments share)
@@ -73,8 +73,8 @@ multGame/
     helm/                # Optional Helm chart alternative
   .github/
     workflows/
-      ci.yml             # Build, test, lint, scan, push images
-      cd.yml             # Deploy via ArgoCD sync or kubectl apply
+      ci.yml             # PR-only: lint, test, build, manifest validation
+      release.yml        # Push to main: lint, test, build, scan, push images to GHCR
   docker-compose.yml     # Local dev: all services + Redis
   Makefile               # Common commands: build, test, run-local, deploy
 ```
@@ -278,32 +278,78 @@ Phase 4 adds dashboards, alerts, and expanded metrics on top of this base.
 
 ## Phase 3: CI/CD Pipeline
 
-### CI (GitHub Actions -- `ci.yml`)
+### Prerequisites (Phase 3 starts here)
 
-Triggers on every push / PR:
+Phase 3 begins by adding the tooling that CI will exercise. These are Phase 3 deliverables, not assumptions:
 
-1. **Lint** -- `golangci-lint` for Go, ESLint + TypeScript strict for React client
-2. **Test** -- `go test ./...` for game logic, Vitest for React components and engine modules, integration tests for WebSocket handshake
-3. **Build** -- Multi-stage Docker builds for game-server, api-server, web-client (Vite build + nginx)
-4. **Scan** -- Trivy or Grype for container image vulnerabilities
-5. **Push** -- Push images to GitHub Container Registry (ghcr.io), tagged with git SHA
+- **Go:** Add `golangci-lint` config (`.golangci.yml`) for server, api, and ws-router.
+- **TypeScript:** Add ESLint config (`eslint.config.js`) with TypeScript strict rules. Add Vitest with at least smoke-level tests for engine modules and React components.
+- **Integration:** Add a WebSocket handshake integration test (Go test that starts the game-server, connects a WS client, asserts a welcome message).
+- **Kustomize validation:** Already exercisable via `make k8s-dev` / `make k8s-prod`, but CI will formalize it.
+
+Only after this tooling exists do the CI workflows wrap around it.
+
+### CI Workflow Split (GitHub Actions)
+
+Two workflows, not one. CI never commits back to the repo.
+
+**`ci.yml` -- runs on `pull_request` (all branches):**
+
+1. **Lint** -- `golangci-lint run` for Go modules, `npm run lint` for client.
+2. **Test** -- `go test ./...` for server/api/ws-router, `npm run test` (Vitest) for client.
+3. **Build** -- Multi-stage Docker builds for game-server, api-server, ws-router, web-client. Build must succeed but images are not pushed.
+4. **Manifest validation** -- `kubectl kustomize k8s/overlays/dev`, `kubectl kustomize k8s/overlays/prod`, and `kubectl kustomize k8s/overlays/dev-monitoring`. Fails the PR if any overlay fails to render. Optionally run `kubeconform` for schema validation against the target Kubernetes version.
+
+PRs do **not** push images, scan, or touch any registry. This keeps PR CI fast and safe for forks.
+
+**`release.yml` -- runs on `push` to `main`:**
+
+1. All steps from `ci.yml` (lint, test, build, validate manifests).
+2. **Scan** -- Trivy scan on each built image. **Failure policy:** CRITICAL findings block the workflow and prevent image push. HIGH findings are reported as workflow annotations but do not block. Unfixed base-image CVEs (e.g., alpine noise) can be suppressed via a `.trivyignore` allowlist checked into the repo.
+3. **Push** -- Push images to GitHub Container Registry (ghcr.io), tagged `sha-<git-sha>`. No `latest` tag is pushed to GHCR; `latest` is only used locally in docker-compose / k3d via `load-images-dev`.
+
+**Optional `workflow_dispatch`:** Manual trigger for force-rebuild or force-redeploy helpers (e.g., rebuild all images from a specific SHA, or trigger an ArgoCD sync via CLI).
+
+### Tagging Strategy
+
+- Every image pushed to GHCR gets an immutable tag: `sha-<full-git-sha>` (e.g., `sha-a1b2c3d4e5f6`).
+- No mutable tags (`latest`, `stable`) in the registry. Immutable tags prevent accidental rollbacks and make audit trivial.
+- Prod consumes SHA tags exclusively. ArgoCD Image Updater matches `sha-*` pattern.
+- Dev/local uses `latest` only via local Docker builds + k3d import (`make load-images-dev`), never from GHCR.
+
+### Registry Auth and Permissions
+
+- `release.yml` needs `packages: write` permission on the GitHub Actions token to push to ghcr.io.
+- ArgoCD Image Updater needs GHCR read credentials (a PAT or GitHub App token with `read:packages` scope), configured as a Kubernetes Secret in the ArgoCD namespace.
+- If the repo is private, GHCR images are also private by default. ArgoCD Image Updater and the cluster's container runtime both need pull credentials (imagePullSecrets).
 
 ### CD (GitOps)
 
 Use **ArgoCD** with **ArgoCD Image Updater**:
 
 - ArgoCD watches the `k8s/` directory in this repo and syncs manifests to the cluster.
-- ArgoCD Image Updater watches ghcr.io for new image tags matching a semver or SHA pattern. When a new image is pushed by CI, Image Updater automatically updates the live deployment -- no commit back to the repo needed, avoiding CI/CD trigger loops.
-- Kustomize overlays pin image tags for each environment. For prod, Image Updater manages the tag. For dev, tags are updated manually or by CI writing to a separate `env-config` branch. A staging overlay can be added alongside the staging namespace when CI/CD is proven.
+- ArgoCD Image Updater watches ghcr.io for new image tags matching the `sha-*` pattern. When a new image is pushed by CI, Image Updater automatically updates the live deployment -- no git commit, no CI trigger loop.
+- **CI does not update Kustomize overlays or commit tag bumps.** The entire image-tag lifecycle is owned by Image Updater, operating outside of git. Kustomize overlays define the base configuration; Image Updater overrides the image tag at deploy time.
+- For dev, tags are applied manually via `make load-images-dev` (local k3d) or by pointing ArgoCD Image Updater at the same GHCR repo with a dev-specific annotation.
 
 This avoids the common pitfall where CI commits a tag bump to the repo, which triggers another CI run, which commits another tag bump, etc. Image Updater breaks the loop by operating outside of git.
 
-### Preview Environments (Stretch Goal)
+### Preview Environments (Stretch Goal -- Second Pass)
 
-- On PR open: spin up a full namespaced environment (`game-pr-123`)
-- Run smoke tests (bot client connects, plays for 10s, asserts no crash)
-- On PR close: tear down the namespace
-- This is very impressive in a portfolio and not hard with Kustomize + a small script
+Preview environments are deferred until the main CI/CD path is proven and stable. They depend on:
+
+- Branch-safe image publication (images tagged with PR number or branch name, not just main SHA).
+- Namespace-scoped secrets (each preview namespace needs its own app-secrets/redis-secrets).
+- Dynamic Ingress hostnames (e.g., `pr-123.multgame.localtest.me`).
+- Reliable teardown (namespace deletion on PR close, including PVCs and any leaked resources).
+
+Once the main pipeline is running:
+
+- On PR open: spin up a full namespaced environment (`game-pr-123`).
+- Run smoke tests (bot client connects, plays for 10s, asserts no crash).
+- On PR close: tear down the namespace.
+
+This is impressive in a portfolio but requires the above prerequisites to work cleanly.
 
 ## Phase 4: Observability (Expand on Phase 2 Metrics Base)
 
@@ -343,14 +389,17 @@ Deploy the game to a public URL so it can be linked from a resume.
 
 ```mermaid
 flowchart LR
-  GitPush[git push] --> CI["GitHub Actions CI"]
-  CI -->|"build + test + push image"| GHCR["ghcr.io"]
-  CI -->|"update image tag"| KustomizeOverlay["k8s/overlays/prod/"]
-  KustomizeOverlay --> ArgoCD
+  GitPush["git push to main"] --> CI["GitHub Actions (release.yml)"]
+  CI -->|"build + test + scan + push sha-tagged image"| GHCR["ghcr.io"]
+  GHCR -->|"new sha-* tag detected"| ImageUpdater["ArgoCD Image Updater"]
+  ImageUpdater -->|"update live image tag"| ArgoCD
+  GitPush -->|"manifest changes"| ArgoCD
   ArgoCD -->|"sync"| k3sCluster["k3s on Hetzner VPS"]
   k3sCluster --> Traefik["Traefik Ingress"]
   Traefik --> Internet["yourgame.dev"]
 ```
+
+CI only builds, scans, and pushes images. It never commits tag bumps back to the repo. ArgoCD Image Updater detects new tags in GHCR and updates the running deployment directly. ArgoCD separately watches the repo for manifest/config changes.
 
 ### Reliability Expectations
 
