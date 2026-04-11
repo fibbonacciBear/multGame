@@ -25,14 +25,14 @@ generatorOptions:
   disableNameSuffixHash: true
 images:
   - name: multgame/game-server
-    newName: ghcr.io/replace-me/multgame-game-server
+    newName: ghcr.io/fibbonaccibear/multgame-game-server
     newTag: latest
   - name: multgame/api-server
-    newName: ghcr.io/replace-me/multgame-api-server
+    newName: ghcr.io/fibbonaccibear/multgame-api-server
     newTag: latest
   - name: multgame/ws-router
-    newName: ghcr.io/replace-me/multgame-ws-router
+    newName: ghcr.io/fibbonaccibear/multgame-ws-router
     newTag: latest
   - name: multgame/web-client
-    newName: ghcr.io/replace-me/multgame-web-client
+    newName: ghcr.io/fibbonaccibear/multgame-web-client
     newTag: latest
