@@ -23,7 +23,7 @@
       }
     },
     {
-      "title": "Lobby Player Count (humans + bots)",
+      "title": "Players per Lobby (humans + bots, 1 lobby = 1 pod)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -39,18 +39,18 @@
       }
     },
     {
-      "title": "Pod Count",
+      "title": "Active Lobbies / Pods",
       "type": "stat",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
           "expr": "count(up{job=\"game-server\"} == 1)",
-          "legendFormat": "game-server"
+          "legendFormat": "lobbies (game-server pods)"
         },
         {
           "expr": "count(up{job=\"api-server\"} == 1)",
-          "legendFormat": "api-server"
+          "legendFormat": "api-server pods"
         }
       ],
       "fieldConfig": {
@@ -159,14 +159,18 @@
       }
     },
     {
-      "title": "Matches Completed (total)",
-      "type": "stat",
+      "title": "Matches Completed",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
           "expr": "sum(game_matches_completed_total)",
-          "legendFormat": "total"
+          "legendFormat": "cumulative"
+        },
+        {
+          "expr": "sum(rate(game_matches_completed_total[5m])) * 60",
+          "legendFormat": "matches/min"
         }
       ],
       "fieldConfig": {
@@ -227,7 +231,7 @@
       }
     },
     {
-      "title": "Matchmaking Joins (/min)",
+      "title": "Matchmaking Joins (/min) & Queue Depth",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 40 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -235,6 +239,10 @@
         {
           "expr": "rate(api_matchmaking_joins_total[5m]) * 60",
           "legendFormat": "joins/min"
+        },
+        {
+          "expr": "sum(api_matchmaking_in_flight)",
+          "legendFormat": "in-flight (queue depth)"
         }
       ],
       "fieldConfig": {

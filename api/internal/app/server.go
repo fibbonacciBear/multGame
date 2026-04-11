@@ -122,6 +122,9 @@ func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	MatchmakingInFlight.Inc()
+	defer MatchmakingInFlight.Dec()
+
 	var payload struct {
 		PlayerName string `json:"playerName"`
 		Region     string `json:"region"`

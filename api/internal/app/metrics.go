@@ -25,6 +25,11 @@ var (
 		Help: "Total successful matchmaking join requests.",
 	})
 
+	MatchmakingInFlight = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "api_matchmaking_in_flight",
+		Help: "Number of matchmaking join requests currently being processed.",
+	})
+
 	LeaderboardReads = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "api_leaderboard_reads_total",
 		Help: "Total leaderboard read requests.",
@@ -46,6 +51,7 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		HTTPRequestDuration,
 		HTTPRequestsTotal,
 		MatchmakingJoins,
+		MatchmakingInFlight,
 		LeaderboardReads,
 		LeaderboardWrites,
 		RedisErrors,

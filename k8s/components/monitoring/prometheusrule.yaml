@@ -32,16 +32,16 @@ spec:
         - alert: APIErrorRateHigh
           expr: |
             (
-              sum(rate(api_http_requests_total{status=~"5.."}[5m]))
+              sum(rate(api_http_requests_total{status=~"5..",path!~"/metrics|/healthz"}[5m]))
               /
-              sum(rate(api_http_requests_total[5m]))
+              sum(rate(api_http_requests_total{path!~"/metrics|/healthz"}[5m]))
             ) > 0.01
           for: 5m
           labels:
             severity: warning
           annotations:
             summary: "API 5xx error rate above 1%"
-            description: "Current error rate is {{ $value | printf \"%.2f\" }}%."
+            description: "Current error rate is {{ $value | humanizePercentage }}."
 
         - alert: APIServerPodRestarts
           expr: |
