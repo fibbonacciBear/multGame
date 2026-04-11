@@ -80,6 +80,7 @@ jobs:
       - client-quality
       - manifest-validation
     strategy:
+      fail-fast: false
       matrix:
         include:
           - image: multgame-game-server
