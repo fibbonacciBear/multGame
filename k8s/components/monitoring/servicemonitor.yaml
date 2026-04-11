@@ -10,3 +10,16 @@ spec:
     - port: http
       path: /metrics
       interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api-server
+spec:
+  selector:
+    matchLabels:
+      app: api-server
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

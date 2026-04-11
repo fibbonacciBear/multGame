@@ -1,12 +1,38 @@
 grafana:
-  enabled: false
+  enabled: true
+  adminPassword: admin
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+      label: grafana_dashboard
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: multgame
+          orgId: 1
+          folder: MultGame
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/multgame
+  dashboardsConfigMaps:
+    multgame: grafana-dashboards
+
 alertmanager:
-  enabled: false
+  enabled: true
+
 prometheus:
   prometheusSpec:
     serviceMonitorSelectorNilUsesHelmValues: false
     podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    additionalAlertRelabelConfigs: []
+
 kube-state-metrics:
   enabled: true
+
 prometheus-node-exporter:
   enabled: true

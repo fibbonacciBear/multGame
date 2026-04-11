@@ -10,6 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"multgame/server/internal/game"
 )
 
@@ -20,13 +23,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	reg := prometheus.DefaultRegisterer
+	game.RegisterMetrics(reg)
+
 	srv := game.NewServer(cfg, logger)
 	srv.Start(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.HandleHealthz)
 	mux.HandleFunc("/readyz", srv.HandleReadyz)
-	mux.HandleFunc("/metrics", srv.HandleMetrics)
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/ws", srv.HandleWS)
 
 	httpServer := &http.Server{

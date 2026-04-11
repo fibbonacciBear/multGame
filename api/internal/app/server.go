@@ -155,6 +155,7 @@ func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	MatchmakingJoins.Inc()
 	wsURL := buildWSURL(s.cfg, assignment.LobbyID, token)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"wsUrl":   wsURL,
@@ -164,6 +165,7 @@ func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleLeaderboard(w http.ResponseWriter, r *http.Request) {
+	LeaderboardReads.Inc()
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -177,6 +179,7 @@ func (s *Server) HandleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	keys, err := s.redis.ZRevRange(ctx, leaderboardIndexKey, 0, int64(limit-1)).Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
+		RedisErrors.Inc()
 		http.Error(w, "failed to load leaderboard", http.StatusInternalServerError)
 		return
 	}
@@ -199,6 +202,7 @@ func (s *Server) HandleLeaderboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleLeaderboardReport(w http.ResponseWriter, r *http.Request) {
+	LeaderboardWrites.Inc()
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -233,6 +237,7 @@ func (s *Server) HandleLeaderboardReport(w http.ResponseWriter, r *http.Request)
 
 		existing, err := s.redis.ZScore(ctx, leaderboardIndexKey, member).Result()
 		if err != nil && !errors.Is(err, redis.Nil) {
+			RedisErrors.Inc()
 			http.Error(w, "failed to update leaderboard", http.StatusInternalServerError)
 			return
 		}
@@ -254,6 +259,7 @@ func (s *Server) HandleLeaderboardReport(w http.ResponseWriter, r *http.Request)
 			Member: member,
 		})
 		if _, err := pipe.Exec(ctx); err != nil {
+			RedisErrors.Inc()
 			http.Error(w, "failed to persist leaderboard", http.StatusInternalServerError)
 			return
 		}

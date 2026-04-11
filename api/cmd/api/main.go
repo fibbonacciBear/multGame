@@ -10,6 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"multgame/api/internal/app"
 )
 
@@ -19,6 +22,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	reg := prometheus.DefaultRegisterer
+	app.RegisterMetrics(reg)
 
 	server, err := app.NewServer(ctx, cfg, logger)
 	if err != nil {
@@ -30,10 +36,11 @@ func main() {
 	mux.HandleFunc("/api/matchmaking/join", server.HandleJoin)
 	mux.HandleFunc("/api/leaderboard", server.HandleLeaderboard)
 	mux.HandleFunc("/api/leaderboard/report", server.HandleLeaderboardReport)
+	mux.Handle("/metrics", promhttp.Handler())
 
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           server.WithCORS(mux),
+		Handler:           app.WithMetrics(server.WithCORS(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

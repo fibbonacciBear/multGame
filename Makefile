@@ -3,7 +3,7 @@ SERVER_DIR := server
 API_DIR := api
 WS_ROUTER_DIR := ws-router
 
-.PHONY: build test run lint compose-down k8s-dev k8s-prod k8s-dev-monitoring k8s-prod-monitoring k8s-argocd k3d-up k3d-down k8s-apply-dev k8s-apply-dev-monitoring helm-metrics-dev load-images-dev typecheck
+.PHONY: build test run lint compose-down k8s-dev k8s-prod k8s-dev-monitoring k8s-prod-monitoring k8s-argocd k3d-up k3d-down k8s-apply-dev k8s-apply-dev-monitoring helm-metrics-dev helm-observability load-images-dev typecheck
 
 build:
 	npm --prefix $(CLIENT_DIR) run build
@@ -66,6 +66,10 @@ load-images-dev:
 helm-metrics-dev:
 	helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack -n monitoring --create-namespace -f k8s/helm/kube-prometheus-stack-values.yaml
 	helm upgrade --install prometheus-adapter prometheus-community/prometheus-adapter -n monitoring -f k8s/helm/prometheus-adapter-values.yaml
+
+helm-observability: helm-metrics-dev
+	helm upgrade --install loki grafana/loki -n monitoring -f k8s/helm/loki-values.yaml
+	helm upgrade --install promtail grafana/promtail -n monitoring -f k8s/helm/promtail-values.yaml
 
 k8s-apply-dev:
 	kubectl apply -k k8s/overlays/dev

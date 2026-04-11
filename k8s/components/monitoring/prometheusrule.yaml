@@ -1,0 +1,64 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: multgame-alerts
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: multgame.game-server
+      rules:
+        - alert: GameTickRateLow
+          expr: |
+            rate(game_tick_duration_seconds_count[2m]) < 55
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Game tick rate below 55 Hz on {{ $labels.pod }}"
+            description: "Tick rate is {{ $value | printf \"%.1f\" }} Hz, expected ≥ 55."
+
+        - alert: GameServerPodRestarts
+          expr: |
+            increase(kube_pod_container_status_restarts_total{container="game-server"}[15m]) > 2
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "game-server pod {{ $labels.pod }} restarted >2 times in 15m"
+
+    - name: multgame.api-server
+      rules:
+        - alert: APIErrorRateHigh
+          expr: |
+            (
+              sum(rate(api_http_requests_total{status=~"5.."}[5m]))
+              /
+              sum(rate(api_http_requests_total[5m]))
+            ) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "API 5xx error rate above 1%"
+            description: "Current error rate is {{ $value | printf \"%.2f\" }}%."
+
+        - alert: APIServerPodRestarts
+          expr: |
+            increase(kube_pod_container_status_restarts_total{container="api-server"}[15m]) > 2
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "api-server pod {{ $labels.pod }} restarted >2 times in 15m"
+
+    - name: multgame.redis
+      rules:
+        - alert: RedisErrorsHigh
+          expr: |
+            rate(api_redis_errors_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Redis errors sustained above 0.1/s for 5 minutes"

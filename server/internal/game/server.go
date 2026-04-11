@@ -373,23 +373,17 @@ func (s *Server) HandleReadyz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ready"))
 }
 
-func (s *Server) HandleMetrics(w http.ResponseWriter, _ *http.Request) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	players := 0
+func (s *Server) updateGauges() {
+	humans := 0
+	total := 0
 	for _, player := range s.lobby.Players {
+		total++
 		if !player.IsBot && player.Connected {
-			players++
+			humans++
 		}
 	}
-
-	body := fmt.Sprintf(
-		"# HELP active_players_per_pod Connected human players in this game-server pod.\n# TYPE active_players_per_pod gauge\nactive_players_per_pod %d\n",
-		players,
-	)
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = w.Write([]byte(body))
+	ActivePlayers.Set(float64(humans))
+	LobbyPlayerCount.Set(float64(total))
 }
 
 func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -422,6 +416,7 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 		PlayerID: claims.Subject,
 		Socket:   socket,
 	}
+	WSConnectionsOpened.Inc()
 
 	s.mu.Lock()
 	now := time.Now()
@@ -493,6 +488,7 @@ func (s *Server) CloseAllConnections() {
 
 func (s *Server) readLoop(connection *ClientConnection) {
 	defer func() {
+		WSConnectionsClosed.Inc()
 		s.mu.Lock()
 		if player, ok := s.lobby.Players[connection.PlayerID]; ok {
 			if player.Connection == connection {
@@ -512,6 +508,7 @@ func (s *Server) readLoop(connection *ClientConnection) {
 			}
 			return
 		}
+		WSMessagesReceived.Inc()
 
 		s.mu.Lock()
 		if player, ok := s.lobby.Players[connection.PlayerID]; ok {
@@ -526,6 +523,9 @@ func (s *Server) readLoop(connection *ClientConnection) {
 }
 
 func (s *Server) step(now time.Time) {
+	start := time.Now()
+	defer func() { TickDuration.Observe(time.Since(start).Seconds()) }()
+
 	s.tickHealth(now)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -550,6 +550,8 @@ func (s *Server) step(now time.Time) {
 	} else if !s.draining && !s.hasConnectedHumansLocked() {
 		s.resetMatchLocked(now)
 	}
+
+	s.updateGauges()
 }
 
 type snapshotDelivery struct {
@@ -558,6 +560,9 @@ type snapshotDelivery struct {
 }
 
 func (s *Server) broadcastSnapshots(now time.Time) {
+	broadcastStart := time.Now()
+	defer func() { SnapshotBroadcastDuration.Observe(time.Since(broadcastStart).Seconds()) }()
+
 	s.mu.RLock()
 	deliveries := make([]snapshotDelivery, 0, len(s.lobby.Players))
 	for _, player := range s.lobby.Players {
@@ -850,6 +855,7 @@ func (s *Server) handleRespawnsLocked(now time.Time) {
 
 func (s *Server) finishMatchLocked() {
 	s.lobby.MatchOver = true
+	MatchesCompleted.Inc()
 }
 
 func (s *Server) reportLeaderboard(results []scoreboardResult) {
@@ -1061,6 +1067,7 @@ func (s *Server) killPlayerLocked(player *Player, killer *Player, reason string,
 	player.VX = 0
 	player.VY = 0
 	player.DeathReason = reason
+	PlayerKills.Inc()
 	if killer != nil {
 		player.KilledBy = killer.Name
 		s.lobby.KillFeed = append([]KillFeedEntry{{
