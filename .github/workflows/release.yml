@@ -72,6 +72,8 @@ jobs:
         run: kubectl kustomize k8s/overlays/prod
       - name: Render dev monitoring overlay
         run: kubectl kustomize k8s/overlays/dev-monitoring
+      - name: Render ArgoCD application manifests
+        run: kubectl kustomize k8s/argocd
 
   images:
     runs-on: ubuntu-latest

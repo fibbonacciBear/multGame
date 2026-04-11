@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: multgame-prod
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: game-server=ghcr.io/fibbonaccibear/multgame-game-server,api-server=ghcr.io/fibbonaccibear/multgame-api-server,ws-router=ghcr.io/fibbonaccibear/multgame-ws-router,web-client=ghcr.io/fibbonaccibear/multgame-web-client
+    argocd-image-updater.argoproj.io/write-back-method: argocd
+    argocd-image-updater.argoproj.io/game-server.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/api-server.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/ws-router.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/web-client.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/game-server.allow-tags: regexp:^sha-[a-f0-9]{40}$
+    argocd-image-updater.argoproj.io/api-server.allow-tags: regexp:^sha-[a-f0-9]{40}$
+    argocd-image-updater.argoproj.io/ws-router.allow-tags: regexp:^sha-[a-f0-9]{40}$
+    argocd-image-updater.argoproj.io/web-client.allow-tags: regexp:^sha-[a-f0-9]{40}$
+    argocd-image-updater.argoproj.io/game-server.pull-secret: pullsecret:argocd/ghcr-pullsecret
+    argocd-image-updater.argoproj.io/api-server.pull-secret: pullsecret:argocd/ghcr-pullsecret
+    argocd-image-updater.argoproj.io/ws-router.pull-secret: pullsecret:argocd/ghcr-pullsecret
+    argocd-image-updater.argoproj.io/web-client.pull-secret: pullsecret:argocd/ghcr-pullsecret
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: game-prod
+  source:
+    repoURL: https://github.com/fibbonacciBear/multGame.git
+    targetRevision: main
+    path: k8s/overlays/prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

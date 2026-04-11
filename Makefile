@@ -3,7 +3,7 @@ SERVER_DIR := server
 API_DIR := api
 WS_ROUTER_DIR := ws-router
 
-.PHONY: build test run lint compose-down k8s-dev k8s-prod k8s-dev-monitoring k8s-prod-monitoring k3d-up k3d-down k8s-apply-dev k8s-apply-dev-monitoring helm-metrics-dev load-images-dev typecheck
+.PHONY: build test run lint compose-down k8s-dev k8s-prod k8s-dev-monitoring k8s-prod-monitoring k8s-argocd k3d-up k3d-down k8s-apply-dev k8s-apply-dev-monitoring helm-metrics-dev load-images-dev typecheck
 
 build:
 	npm --prefix $(CLIENT_DIR) run build
@@ -43,6 +43,9 @@ k8s-dev-monitoring:
 
 k8s-prod-monitoring:
 	kubectl kustomize k8s/overlays/prod-monitoring
+
+k8s-argocd:
+	kubectl kustomize k8s/argocd
 
 k3d-up:
 	k3d cluster create multgame --agents 1 --port "8080:80@loadbalancer"
