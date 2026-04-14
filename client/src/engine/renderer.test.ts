@@ -5,6 +5,8 @@ import type { SnapshotMessage } from "./types";
 function createContextStub() {
   const clearRect = vi.fn();
   const translate = vi.fn();
+  const addColorStop = vi.fn();
+  const createRadialGradient = vi.fn(() => ({ addColorStop })) as unknown as CanvasRenderingContext2D["createRadialGradient"];
 
   const ctx = {
     canvas: {
@@ -26,6 +28,8 @@ function createContextStub() {
     strokeRect: vi.fn(),
     restore: vi.fn(),
     fillText: vi.fn(),
+    createRadialGradient,
+    globalAlpha: 1,
     lineWidth: 0,
     strokeStyle: "",
     fillStyle: "",
@@ -33,7 +37,7 @@ function createContextStub() {
     textAlign: "left" as CanvasTextAlign,
   } as unknown as CanvasRenderingContext2D;
 
-  return { ctx, clearRect, translate };
+  return { ctx, clearRect, translate, createRadialGradient, addColorStop };
 }
 
 const snapshot: SnapshotMessage = {
