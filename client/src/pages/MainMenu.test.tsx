@@ -60,4 +60,55 @@ describe("MainMenu", () => {
     expect(localStorage.getItem("multgame.playerName")).toBe("Pilot One");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("uses a default name when input is blank", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            wsUrl: "ws://localhost:8080/ws?lobby=test&token=token-2",
+            lobbyId: "test",
+            token: "token-2",
+          }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <MainMenu />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("No posted results yet.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith("/game", {
+        state: {
+          match: {
+            wsUrl: "ws://localhost:8080/ws?lobby=test&token=token-2",
+            lobbyId: "test",
+            token: "token-2",
+          },
+        },
+      });
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/matchmaking/join"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ playerName: "Pilot", region: "local" }),
+      }),
+    );
+    expect(localStorage.getItem("multgame.playerName")).toBe("Pilot");
+  });
 });

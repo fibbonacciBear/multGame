@@ -4,6 +4,7 @@ import { useGameStore, type LeaderboardEntry } from "../store/gameStore";
 import type { MatchJoinResponse } from "../engine/types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+const DEFAULT_PLAYER_NAME = "Pilot";
 
 export default function MainMenu() {
   const navigate = useNavigate();
@@ -39,16 +40,14 @@ export default function MainMenu() {
 
     try {
       const trimmedName = playerName.trim().slice(0, 18);
-      if (!trimmedName) {
-        throw new Error("Enter a player name before joining.");
-      }
+      const submittedName = trimmedName || DEFAULT_PLAYER_NAME;
 
       const response = await fetch(`${API_BASE_URL}/api/matchmaking/join`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ playerName: trimmedName, region }),
+        body: JSON.stringify({ playerName: submittedName, region }),
       });
 
       if (!response.ok) {
@@ -56,8 +55,8 @@ export default function MainMenu() {
       }
 
       const match = (await response.json()) as MatchJoinResponse;
-      localStorage.setItem("multgame.playerName", trimmedName);
-      setStoredPlayerName(trimmedName);
+      localStorage.setItem("multgame.playerName", submittedName);
+      setStoredPlayerName(submittedName);
       navigate("/game", { state: { match } });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to join a match.");
