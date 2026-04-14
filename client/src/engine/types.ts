@@ -17,6 +17,7 @@ export type WorldPlayer = {
   radius: number;
   angle: number;
   health: number;
+  maxHealth: number;
   isAlive: boolean;
   respawnInMs: number;
   isBot: boolean;
@@ -28,7 +29,7 @@ export type WorldObject = {
   x: number;
   y: number;
   radius: number;
-  toughness: number;
+  mass: number;
 };
 
 export type Projectile = {

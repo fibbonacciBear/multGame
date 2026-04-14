@@ -40,6 +40,22 @@ var (
 		Help: "Total player kills (includes bot-on-bot).",
 	})
 
+	CrashContacts = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "game_crash_contacts_total",
+		Help: "Total crash contacts resolved by the authoritative combat loop.",
+	})
+
+	CrashLethalOutcomes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "game_crash_lethal_outcomes_total",
+		Help: "Total player deaths attributed to crash damage.",
+	})
+
+	PlayerMass = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "game_player_mass",
+		Help:    "Observed alive-player mass values during game ticks.",
+		Buckets: []float64{10, 20, 40, 60, 80, 120, 180, 250},
+	})
+
 	MatchesCompleted = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "game_matches_completed_total",
 		Help: "Total matches that reached their time limit.",
@@ -60,6 +76,9 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		WSConnectionsOpened,
 		WSConnectionsClosed,
 		PlayerKills,
+		CrashContacts,
+		CrashLethalOutcomes,
+		PlayerMass,
 		MatchesCompleted,
 		LobbyPlayerCount,
 	)

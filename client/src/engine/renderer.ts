@@ -1,11 +1,17 @@
 import type { SnapshotMessage, WorldObject, WorldPlayer } from "./types";
 
 const GRID_SPACING = 100;
+const BASE_HEALTH_BAR_WIDTH = 28;
+const BASELINE_MAX_HEALTH = 100;
 
-function toughnessColor(toughness: number) {
-  const t = (toughness - 50) / 450;
-  const r = Math.round(55 + 200 * t);
-  const g = Math.round(220 - 180 * t);
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function objectMassColor(mass: number) {
+  const t = clamp((mass - 0.35) / 0.8, 0, 1);
+  const r = Math.round(72 + 160 * t);
+  const g = Math.round(224 - 100 * t);
   return `rgb(${r},${g},50)`;
 }
 
@@ -52,12 +58,28 @@ function drawObjects(ctx: CanvasRenderingContext2D, objects: WorldObject[], camX
 
     ctx.beginPath();
     ctx.arc(object.x, object.y, object.radius, 0, Math.PI * 2);
-    ctx.fillStyle = toughnessColor(object.toughness);
+    ctx.fillStyle = objectMassColor(object.mass);
     ctx.fill();
   }
 }
 
+function drawHealthBar(ctx: CanvasRenderingContext2D, player: WorldPlayer) {
+  const ratio = player.maxHealth > 0 ? clamp(player.health / player.maxHealth, 0, 1) : 0;
+  const scaledWidth = BASE_HEALTH_BAR_WIDTH * (player.maxHealth / BASELINE_MAX_HEALTH);
+  const width = clamp(scaledWidth, 20, 56);
+  const height = 4;
+  const x = player.x - width / 2;
+  const y = player.y - player.radius - 22;
+
+  ctx.fillStyle = "rgba(5,9,20,0.82)";
+  ctx.fillRect(x, y, width, height);
+  ctx.fillStyle = ratio > 0.35 ? "rgba(113, 255, 169, 0.92)" : "rgba(255, 139, 102, 0.92)";
+  ctx.fillRect(x, y, width * ratio, height);
+}
+
 function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: boolean) {
+  drawHealthBar(ctx, player);
+
   ctx.beginPath();
   ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
   ctx.fillStyle = isSelf ? "#68e1fd" : player.color;

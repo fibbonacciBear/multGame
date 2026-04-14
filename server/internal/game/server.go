@@ -37,11 +37,27 @@ const (
 	defaultNumObjects        = 200
 	defaultStartingMass      = 10
 	defaultStartingHealth    = 100
+	defaultHealthBase        = 100
+	defaultHealthScale       = 25
+	defaultHealthMassScale   = 10
+	defaultRadiusBase        = 10
+	defaultRadiusScale       = 6
+	defaultRadiusMassScale   = 10
 	defaultProjectileSpeed   = 1250
 	defaultProjectileDamage  = 28
 	defaultProjectileRadius  = 5
 	defaultShootCooldown     = 250 * time.Millisecond
 	defaultProjectileTTL     = 1200 * time.Millisecond
+	defaultCrashDamagePct    = 0.9
+	defaultCrashKnockback    = 250
+	defaultCrashPairCooldown = 500 * time.Millisecond
+	defaultKillMassTransfer  = 0.45
+	defaultKillHealPct       = 0.2
+	defaultRespawnRetention  = 0.45
+	defaultSpawnInvuln       = time.Second
+	defaultSpawnAttempts     = 20
+	defaultPassiveHealPerSec = 2.5
+	defaultPassiveHealDelay  = 1500 * time.Millisecond
 )
 
 var palette = []string{
@@ -54,79 +70,130 @@ var palette = []string{
 }
 
 type Config struct {
-	Port                      string
-	JWTSecret                 string
-	ReportSecret              string
-	APIServerURL              string
-	RedisAddr                 string
-	RedisPassword             string
-	RedisDB                   int
-	PodIP                     string
-	LobbyID                   string
-	TickRate                  int
-	SnapshotRate              int
-	MaxPlayers                int
-	WorldWidth                float64
-	WorldHeight               float64
-	GravityAccel              float64
-	Drag                      float64
-	TerminalSpeed             float64
-	PlayerRadiusScale         float64
-	NumObjects                int
-	StartingMass              float64
-	StartingHealth            float64
-	ProjectileSpeed           float64
-	ProjectileDamage          float64
-	ProjectileRadius          float64
-	ShootCooldown             time.Duration
-	ProjectileTTL             time.Duration
-	MatchDuration             time.Duration
-	RespawnDelay              time.Duration
-	BotFillDelay              time.Duration
-	RegistryHeartbeatInterval time.Duration
-	RegistryHeartbeatTTL      time.Duration
-	LobbyTTL                  time.Duration
-	HealthTickThreshold       time.Duration
-	ShutdownDrainTimeout      time.Duration
+	Port                         string
+	JWTSecret                    string
+	ReportSecret                 string
+	APIServerURL                 string
+	RedisAddr                    string
+	RedisPassword                string
+	RedisDB                      int
+	PodIP                        string
+	LobbyID                      string
+	TickRate                     int
+	SnapshotRate                 int
+	MaxPlayers                   int
+	WorldWidth                   float64
+	WorldHeight                  float64
+	GravityAccel                 float64
+	Drag                         float64
+	TerminalSpeed                float64
+	PlayerRadiusScale            float64
+	RadiusBase                   float64
+	RadiusScale                  float64
+	RadiusMassScale              float64
+	NumObjects                   int
+	StartingMass                 float64
+	StartingHealth               float64
+	HealthBase                   float64
+	HealthScale                  float64
+	HealthMassScale              float64
+	ProjectileSpeed              float64
+	ProjectileDamage             float64
+	ProjectileRadius             float64
+	ShootCooldown                time.Duration
+	ProjectileTTL                time.Duration
+	CrashDamagePct               float64
+	CrashPairCooldown            time.Duration
+	CrashKnockbackImpulse        float64
+	KillMassTransferPct          float64
+	KillHealPct                  float64
+	RespawnRetentionPct          float64
+	SpawnInvulnerabilityDuration time.Duration
+	SpawnClearanceAttempts       int
+	PassiveHealPerSecond         float64
+	PassiveHealCombatDelay       time.Duration
+	BotDifficultyMode            string
+	BotDifficultyDistribution    string
+	MatchDuration                time.Duration
+	RespawnDelay                 time.Duration
+	BotFillDelay                 time.Duration
+	RegistryHeartbeatInterval    time.Duration
+	RegistryHeartbeatTTL         time.Duration
+	LobbyTTL                     time.Duration
+	HealthTickThreshold          time.Duration
+	ShutdownDrainTimeout         time.Duration
 }
 
 func LoadConfig() Config {
-	return Config{
-		Port:                      envOrDefault("PORT", "8080"),
-		JWTSecret:                 envOrDefault("JWT_SECRET", "dev-secret"),
-		ReportSecret:              envOrDefault("REPORT_SHARED_SECRET", envOrDefault("JWT_SECRET", "dev-secret")),
-		APIServerURL:              envOrDefault("API_SERVER_URL", "http://api-server:8081"),
-		RedisAddr:                 envOrDefault("REDIS_ADDR", "redis:6379"),
-		RedisPassword:             os.Getenv("REDIS_PASSWORD"),
-		RedisDB:                   envInt("REDIS_DB", 0),
-		PodIP:                     defaultPodIP(),
-		LobbyID:                   defaultLobbyID(),
-		TickRate:                  envInt("TICK_RATE", 60),
-		SnapshotRate:              envInt("SNAPSHOT_RATE", 20),
-		MaxPlayers:                envInt("MAX_PLAYERS", 10),
-		WorldWidth:                envFloat("WORLD_WIDTH", defaultWorldWidth),
-		WorldHeight:               envFloat("WORLD_HEIGHT", defaultWorldHeight),
-		GravityAccel:              envFloat("GRAVITY_ACCEL", defaultGravityAccel),
-		Drag:                      envFloat("DRAG", defaultDrag),
-		TerminalSpeed:             envFloat("TERMINAL_SPEED", defaultTerminalSpeed),
-		PlayerRadiusScale:         envFloat("PLAYER_RADIUS_SCALE", defaultPlayerRadiusScale),
-		NumObjects:                envInt("NUM_OBJECTS", defaultNumObjects),
-		StartingMass:              envFloat("STARTING_MASS", defaultStartingMass),
-		StartingHealth:            envFloat("STARTING_HEALTH", defaultStartingHealth),
-		ProjectileSpeed:           envFloat("PROJECTILE_SPEED", defaultProjectileSpeed),
-		ProjectileDamage:          envFloat("PROJECTILE_DAMAGE", defaultProjectileDamage),
-		ProjectileRadius:          envFloat("PROJECTILE_RADIUS", defaultProjectileRadius),
-		ShootCooldown:             envDuration("SHOOT_COOLDOWN", defaultShootCooldown),
-		ProjectileTTL:             envDuration("PROJECTILE_TTL", defaultProjectileTTL),
-		MatchDuration:             envDuration("MATCH_DURATION", 5*time.Minute),
-		RespawnDelay:              envDuration("RESPAWN_DELAY", 2*time.Second),
-		BotFillDelay:              envDuration("BOT_FILL_DELAY", 5*time.Second),
-		RegistryHeartbeatInterval: envDuration("REGISTRY_HEARTBEAT_INTERVAL", 5*time.Second),
-		RegistryHeartbeatTTL:      registryHeartbeatTTL(),
-		LobbyTTL:                  envDuration("LOBBY_TTL", 330*time.Second),
-		HealthTickThreshold:       envDuration("HEALTH_TICK_THRESHOLD", 2*time.Second),
-		ShutdownDrainTimeout:      envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
+	startingMass := envFloat("STARTING_MASS", defaultStartingMass)
+	if os.Getenv("HEALTH_BASE") == "" && os.Getenv("STARTING_HEALTH") != "" {
+		log.Printf("warning: STARTING_HEALTH is deprecated; use HEALTH_BASE instead")
 	}
+	healthBase := envFloat("HEALTH_BASE", envFloat("STARTING_HEALTH", defaultHealthBase))
+	radiusBase := envFloat("RADIUS_BASE", 0)
+	if radiusBase <= 0 {
+		if os.Getenv("PLAYER_RADIUS_SCALE") != "" {
+			log.Printf("warning: PLAYER_RADIUS_SCALE is deprecated; use RADIUS_BASE/RADIUS_SCALE/RADIUS_MASS_SCALE instead")
+		}
+		legacyScale := envFloat("PLAYER_RADIUS_SCALE", defaultPlayerRadiusScale)
+		radiusBase = math.Sqrt(math.Max(startingMass, 1)) * legacyScale
+	}
+
+	cfg := Config{
+		Port:                         envOrDefault("PORT", "8080"),
+		JWTSecret:                    envOrDefault("JWT_SECRET", "dev-secret"),
+		ReportSecret:                 envOrDefault("REPORT_SHARED_SECRET", envOrDefault("JWT_SECRET", "dev-secret")),
+		APIServerURL:                 envOrDefault("API_SERVER_URL", "http://api-server:8081"),
+		RedisAddr:                    envOrDefault("REDIS_ADDR", "redis:6379"),
+		RedisPassword:                os.Getenv("REDIS_PASSWORD"),
+		RedisDB:                      envInt("REDIS_DB", 0),
+		PodIP:                        defaultPodIP(),
+		LobbyID:                      defaultLobbyID(),
+		TickRate:                     envInt("TICK_RATE", 60),
+		SnapshotRate:                 envInt("SNAPSHOT_RATE", 20),
+		MaxPlayers:                   envInt("MAX_PLAYERS", 10),
+		WorldWidth:                   envFloat("WORLD_WIDTH", defaultWorldWidth),
+		WorldHeight:                  envFloat("WORLD_HEIGHT", defaultWorldHeight),
+		GravityAccel:                 envFloat("GRAVITY_ACCEL", defaultGravityAccel),
+		Drag:                         envFloat("DRAG", defaultDrag),
+		TerminalSpeed:                envFloat("TERMINAL_SPEED", defaultTerminalSpeed),
+		PlayerRadiusScale:            envFloat("PLAYER_RADIUS_SCALE", defaultPlayerRadiusScale),
+		RadiusBase:                   radiusBase,
+		RadiusScale:                  envFloat("RADIUS_SCALE", defaultRadiusScale),
+		RadiusMassScale:              envFloat("RADIUS_MASS_SCALE", defaultRadiusMassScale),
+		NumObjects:                   envInt("NUM_OBJECTS", defaultNumObjects),
+		StartingMass:                 startingMass,
+		StartingHealth:               envFloat("STARTING_HEALTH", defaultStartingHealth),
+		HealthBase:                   healthBase,
+		HealthScale:                  envFloat("HEALTH_SCALE", defaultHealthScale),
+		HealthMassScale:              envFloat("HEALTH_MASS_SCALE", defaultHealthMassScale),
+		ProjectileSpeed:              envFloat("PROJECTILE_SPEED", defaultProjectileSpeed),
+		ProjectileDamage:             envFloat("PROJECTILE_DAMAGE", defaultProjectileDamage),
+		ProjectileRadius:             envFloat("PROJECTILE_RADIUS", defaultProjectileRadius),
+		ShootCooldown:                envDuration("SHOOT_COOLDOWN", defaultShootCooldown),
+		ProjectileTTL:                envDuration("PROJECTILE_TTL", defaultProjectileTTL),
+		CrashDamagePct:               envFloat("CRASH_DAMAGE_PCT", defaultCrashDamagePct),
+		CrashPairCooldown:            envDuration("CRASH_PAIR_COOLDOWN", defaultCrashPairCooldown),
+		CrashKnockbackImpulse:        envFloat("CRASH_KNOCKBACK_IMPULSE", defaultCrashKnockback),
+		KillMassTransferPct:          envFloat("KILL_MASS_TRANSFER_PCT", defaultKillMassTransfer),
+		KillHealPct:                  envFloat("KILL_HEAL_PCT", defaultKillHealPct),
+		RespawnRetentionPct:          envFloat("RESPAWN_RETENTION_PCT", defaultRespawnRetention),
+		SpawnInvulnerabilityDuration: envDuration("SPAWN_INVULNERABILITY_DURATION", defaultSpawnInvuln),
+		SpawnClearanceAttempts:       envInt("SPAWN_CLEARANCE_ATTEMPTS", defaultSpawnAttempts),
+		PassiveHealPerSecond:         envFloat("PASSIVE_HEAL_PER_SECOND", defaultPassiveHealPerSec),
+		PassiveHealCombatDelay:       envDuration("PASSIVE_HEAL_COMBAT_DELAY", defaultPassiveHealDelay),
+		BotDifficultyMode:            envOrDefault("BOT_DIFFICULTY_MODE", "weighted"),
+		BotDifficultyDistribution:    envOrDefault("BOT_DIFFICULTY_DISTRIBUTION", "L0:10,L1:30,L2:40,L3:20"),
+		MatchDuration:                envDuration("MATCH_DURATION", 5*time.Minute),
+		RespawnDelay:                 envDuration("RESPAWN_DELAY", 2*time.Second),
+		BotFillDelay:                 envDuration("BOT_FILL_DELAY", 5*time.Second),
+		RegistryHeartbeatInterval:    envDuration("REGISTRY_HEARTBEAT_INTERVAL", 5*time.Second),
+		RegistryHeartbeatTTL:         registryHeartbeatTTL(),
+		LobbyTTL:                     envDuration("LOBBY_TTL", 330*time.Second),
+		HealthTickThreshold:          envDuration("HEALTH_TICK_THRESHOLD", 2*time.Second),
+		ShutdownDrainTimeout:         envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
+	}
+	return normalizeConfig(cfg)
 }
 
 type Server struct {
@@ -152,36 +219,42 @@ type Lobby struct {
 	MatchOver  bool
 
 	Players     map[string]*Player
+	CrashPairs  map[string]time.Time
 	Objects     []*Collectible
 	Projectiles []*Projectile
 	KillFeed    []KillFeedEntry
 }
 
 type Player struct {
-	ID            string
-	Name          string
-	Color         string
-	IsBot         bool
-	Connected     bool
-	Connection    *ClientConnection
-	X             float64
-	Y             float64
-	VX            float64
-	VY            float64
-	Mass          float64
-	Health        float64
-	Angle         float64
-	Alive         bool
-	RespawnAt     time.Time
-	LastShotAt    time.Time
-	Input         InputState
-	Score         int
-	Kills         int
-	DeathReason   string
-	KilledBy      string
-	BotTargetX    float64
-	BotTargetY    float64
-	BotRetargetAt time.Time
+	ID                     string
+	Name                   string
+	Color                  string
+	IsBot                  bool
+	Connected              bool
+	Connection             *ClientConnection
+	X                      float64
+	Y                      float64
+	VX                     float64
+	VY                     float64
+	Mass                   float64
+	Health                 float64
+	Angle                  float64
+	Alive                  bool
+	RespawnAt              time.Time
+	LastShotAt             time.Time
+	Input                  InputState
+	Score                  int
+	Kills                  int
+	DeathReason            string
+	KilledBy               string
+	BotTargetX             float64
+	BotTargetY             float64
+	BotRetargetAt          time.Time
+	BotLevel               BotLevel
+	LastCombatAt           time.Time
+	PreDeathMass           float64
+	SpawnInvulnerableUntil time.Time
+	PendingSpawnSeparation bool
 }
 
 type ClientConnection struct {
@@ -191,11 +264,11 @@ type ClientConnection struct {
 }
 
 type Collectible struct {
-	ID        string  `json:"id"`
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
-	Radius    float64 `json:"radius"`
-	Toughness float64 `json:"toughness"`
+	ID     string  `json:"id"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Radius float64 `json:"radius"`
+	Mass   float64 `json:"mass"`
 }
 
 type Projectile struct {
@@ -275,6 +348,7 @@ type snapshotPlayer struct {
 	Radius      float64 `json:"radius"`
 	Angle       float64 `json:"angle"`
 	Health      float64 `json:"health"`
+	MaxHealth   float64 `json:"maxHealth"`
 	IsAlive     bool    `json:"isAlive"`
 	RespawnInMs int64   `json:"respawnInMs"`
 	IsBot       bool    `json:"isBot"`
@@ -296,6 +370,7 @@ type selfState struct {
 	Score       int     `json:"score"`
 	Mass        float64 `json:"mass"`
 	Health      float64 `json:"health"`
+	MaxHealth   float64 `json:"maxHealth"`
 	Kills       int     `json:"kills"`
 	IsAlive     bool    `json:"isAlive"`
 	RespawnInMs int64   `json:"respawnInMs"`
@@ -327,6 +402,7 @@ type leaderboardPlayerHit struct {
 
 func NewServer(cfg Config, logger *log.Logger) *Server {
 	now := time.Now()
+	cfg = normalizeConfig(cfg)
 
 	server := &Server{
 		cfg:    cfg,
@@ -340,6 +416,7 @@ func NewServer(cfg Config, logger *log.Logger) *Server {
 			MatchStart: now,
 			MatchEnds:  now.Add(cfg.MatchDuration),
 			Players:    make(map[string]*Player),
+			CrashPairs: make(map[string]time.Time),
 			Objects:    make([]*Collectible, 0, cfg.NumObjects),
 		},
 		rng:        mathrand.New(mathrand.NewSource(time.Now().UnixNano())),
@@ -408,6 +485,9 @@ func (s *Server) updateGauges() {
 		total++
 		if !player.IsBot && player.Connected {
 			humans++
+		}
+		if player.Alive {
+			PlayerMass.Observe(player.Mass)
 		}
 	}
 	ActivePlayers.Set(float64(humans))
@@ -566,10 +646,11 @@ func (s *Server) step(now time.Time) {
 		s.fillBotsLocked(now)
 		s.updateBotsLocked(now)
 		s.updatePlayersLocked(now)
+		s.resolveExpiredSpawnSeparationsLocked(now)
 		s.updateProjectilesLocked(now)
 		s.resolveObjectCollisionsLocked(now)
-		s.resolvePlayerCollisionsLocked(now)
-		s.resolveProjectileCollisionsLocked(now)
+		s.resolveCombatLocked(now)
+		s.applyPassiveHealingLocked(now)
 		if now.After(s.lobby.MatchEnds) {
 			s.finishMatchLocked()
 			go s.reportLeaderboard(s.scoreboardLocked())
@@ -597,7 +678,7 @@ func (s *Server) broadcastSnapshots(now time.Time) {
 		if player.Connected && player.Connection != nil {
 			deliveries = append(deliveries, snapshotDelivery{
 				connection: player.Connection,
-				self:       buildSelfState(player, now),
+				self:       s.buildSelfState(player, now),
 			})
 		}
 	}
@@ -655,50 +736,6 @@ func (s *Server) fillBotsLocked(now time.Time) {
 	}
 }
 
-func (s *Server) updateBotsLocked(now time.Time) {
-	livePlayers := make([]*Player, 0, len(s.lobby.Players))
-	for _, player := range s.lobby.Players {
-		if player.Alive {
-			livePlayers = append(livePlayers, player)
-		}
-	}
-
-	for _, player := range s.lobby.Players {
-		if !player.IsBot || !player.Alive {
-			continue
-		}
-
-		target, distance := s.closestTargetLocked(player, livePlayers)
-		if target == nil || now.After(player.BotRetargetAt) {
-			player.BotTargetX = s.randFloat(200, s.cfg.WorldWidth-200)
-			player.BotTargetY = s.randFloat(200, s.cfg.WorldHeight-200)
-			player.BotRetargetAt = now.Add(1800 * time.Millisecond)
-		}
-
-		targetX := player.BotTargetX
-		targetY := player.BotTargetY
-		shoot := false
-
-		if target != nil {
-			if target.Mass < player.Mass*0.9 {
-				targetX = target.X
-				targetY = target.Y
-				shoot = distance < 650
-			} else if target.Mass > player.Mass*1.15 {
-				targetX = player.X - (target.X - player.X)
-				targetY = player.Y - (target.Y - player.Y)
-			}
-		}
-
-		angle := math.Atan2(targetY-player.Y, targetX-player.X)
-		player.Input = InputState{
-			Angle:    angle,
-			Strength: 0.9,
-			Shoot:    shoot,
-		}
-	}
-}
-
 func (s *Server) updatePlayersLocked(now time.Time) {
 	dt := 1.0 / float64(s.cfg.TickRate)
 
@@ -725,7 +762,7 @@ func (s *Server) updatePlayersLocked(now time.Time) {
 		player.Y += player.VY * dt
 		s.clampPlayerToWorldLocked(player)
 
-		if player.Input.Shoot && now.Sub(player.LastShotAt) >= s.cfg.ShootCooldown {
+		if player.Input.Shoot && !s.isInvulnerable(player, now) && now.Sub(player.LastShotAt) >= s.cfg.ShootCooldown {
 			s.spawnProjectileLocked(player, now)
 			player.LastShotAt = now
 		}
@@ -751,134 +788,6 @@ func (s *Server) updateProjectilesLocked(now time.Time) {
 	}
 
 	s.lobby.Projectiles = projectiles
-}
-
-func (s *Server) resolveObjectCollisionsLocked(now time.Time) {
-	for _, player := range s.lobby.Players {
-		if !player.Alive {
-			continue
-		}
-
-		speed := math.Hypot(player.VX, player.VY)
-		energy := 0.5 * player.Mass * speed * speed
-		playerRadius := s.radiusForMass(player.Mass)
-
-		for index := range s.lobby.Objects {
-			object := s.lobby.Objects[index]
-			dx := player.X - object.X
-			dy := player.Y - object.Y
-			if math.Hypot(dx, dy) >= playerRadius+object.Radius {
-				continue
-			}
-
-			if energy > object.Toughness {
-				player.Mass += object.Toughness / 50
-				player.Health = math.Min(s.cfg.StartingHealth, player.Health+4)
-				s.lobby.Objects[index] = s.spawnObjectLocked()
-			} else {
-				s.killPlayerLocked(player, nil, "crashed into a dense shard", now)
-			}
-		}
-	}
-}
-
-func (s *Server) resolvePlayerCollisionsLocked(now time.Time) {
-	livePlayers := make([]*Player, 0, len(s.lobby.Players))
-	for _, player := range s.lobby.Players {
-		if player.Alive {
-			livePlayers = append(livePlayers, player)
-		}
-	}
-
-	for i := 0; i < len(livePlayers); i++ {
-		for j := i + 1; j < len(livePlayers); j++ {
-			left := livePlayers[i]
-			right := livePlayers[j]
-			if !left.Alive || !right.Alive {
-				continue
-			}
-
-			minDistance := s.radiusForMass(left.Mass) + s.radiusForMass(right.Mass)
-			if math.Hypot(left.X-right.X, left.Y-right.Y) >= minDistance {
-				continue
-			}
-
-			winner := left
-			loser := right
-			if right.Mass > left.Mass {
-				winner = right
-				loser = left
-			} else if math.Abs(right.Mass-left.Mass) < 0.01 {
-				if math.Hypot(right.VX, right.VY) > math.Hypot(left.VX, left.VY) {
-					winner = right
-					loser = left
-				}
-			}
-
-			winner.Mass += loser.Mass * 0.35
-			winner.Health = math.Min(s.cfg.StartingHealth, winner.Health+8)
-			winner.Score++
-			winner.Kills++
-			s.killPlayerLocked(loser, winner, fmt.Sprintf("rammed by %s", winner.Name), now)
-		}
-	}
-}
-
-func (s *Server) resolveProjectileCollisionsLocked(now time.Time) {
-	projectiles := s.lobby.Projectiles[:0]
-
-	for _, projectile := range s.lobby.Projectiles {
-		hit := false
-		for _, player := range s.lobby.Players {
-			if !player.Alive || player.ID == projectile.OwnerID {
-				continue
-			}
-
-			minDistance := s.radiusForMass(player.Mass) + projectile.Radius
-			if math.Hypot(player.X-projectile.X, player.Y-projectile.Y) >= minDistance {
-				continue
-			}
-
-			player.Health -= projectile.Damage
-			player.Mass = math.Max(s.cfg.StartingMass*0.55, player.Mass-projectile.Damage/25)
-			if player.Health <= 0 {
-				owner := s.lobby.Players[projectile.OwnerID]
-				if owner != nil {
-					owner.Score++
-					owner.Kills++
-					s.killPlayerLocked(player, owner, fmt.Sprintf("shot down by %s", owner.Name), now)
-				} else {
-					s.killPlayerLocked(player, nil, "shot down", now)
-				}
-			}
-			hit = true
-			break
-		}
-
-		if !hit {
-			projectiles = append(projectiles, projectile)
-		}
-	}
-
-	s.lobby.Projectiles = projectiles
-}
-
-func (s *Server) handleRespawnsLocked(now time.Time) {
-	for _, player := range s.lobby.Players {
-		if player.Alive || player.RespawnAt.IsZero() || now.Before(player.RespawnAt) {
-			continue
-		}
-
-		player.Alive = true
-		player.Health = s.cfg.StartingHealth
-		player.Mass = s.cfg.StartingMass
-		player.VX = 0
-		player.VY = 0
-		player.KilledBy = ""
-		player.DeathReason = ""
-		player.RespawnAt = time.Time{}
-		s.spawnPlayerAtRandomPositionLocked(player)
-	}
 }
 
 func (s *Server) finishMatchLocked() {
@@ -970,8 +879,8 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 			Name:  sanitizeName(name),
 			Color: s.randomColor(),
 		}
-		player.Health = s.cfg.StartingHealth
 		player.Mass = s.cfg.StartingMass
+		player.Health = s.maxHealthForMass(player.Mass)
 		player.Alive = true
 		s.spawnPlayerAtRandomPositionLocked(player)
 		s.lobby.Players[player.ID] = player
@@ -986,7 +895,7 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 		player.Mass = s.cfg.StartingMass
 	}
 	if player.Health <= 0 {
-		player.Health = s.cfg.StartingHealth
+		player.Health = s.maxHealthForMass(player.Mass)
 	}
 	if player.X == 0 && player.Y == 0 {
 		s.spawnPlayerAtRandomPositionLocked(player)
@@ -994,6 +903,8 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 	player.RespawnAt = time.Time{}
 	player.DeathReason = ""
 	player.KilledBy = ""
+	player.SpawnInvulnerableUntil = time.Time{}
+	player.PendingSpawnSeparation = false
 	player.LastShotAt = now.Add(-s.cfg.ShootCooldown)
 
 	return player
@@ -1008,37 +919,10 @@ func (s *Server) removeOneBotLocked() {
 	}
 }
 
-func (s *Server) newBotLocked(now time.Time) *Player {
-	bot := &Player{
-		ID:         randomID("bot"),
-		Name:       fmt.Sprintf("Bot-%02d", s.rng.Intn(90)+10),
-		Color:      s.randomColor(),
-		IsBot:      true,
-		Alive:      true,
-		Connected:  false,
-		Mass:       s.cfg.StartingMass,
-		Health:     s.cfg.StartingHealth,
-		LastShotAt: now.Add(-s.cfg.ShootCooldown),
-	}
-	s.spawnPlayerAtRandomPositionLocked(bot)
-	return bot
-}
-
 func (s *Server) spawnObjectsLocked() {
 	s.lobby.Objects = s.lobby.Objects[:0]
 	for i := 0; i < s.cfg.NumObjects; i++ {
 		s.lobby.Objects = append(s.lobby.Objects, s.spawnObjectLocked())
-	}
-}
-
-func (s *Server) spawnObjectLocked() *Collectible {
-	radius := s.randFloat(5, 20)
-	return &Collectible{
-		ID:        randomID("obj"),
-		X:         s.randFloat(radius, s.cfg.WorldWidth-radius),
-		Y:         s.randFloat(radius, s.cfg.WorldHeight-radius),
-		Radius:    radius,
-		Toughness: s.randFloat(50, 500),
 	}
 }
 
@@ -1078,23 +962,24 @@ func (s *Server) clampPlayerToWorldLocked(player *Player) {
 	}
 }
 
-func (s *Server) spawnPlayerAtRandomPositionLocked(player *Player) {
-	radius := s.radiusForMass(math.Max(player.Mass, s.cfg.StartingMass))
-	player.X = s.randFloat(radius+20, s.cfg.WorldWidth-radius-20)
-	player.Y = s.randFloat(radius+20, s.cfg.WorldHeight-radius-20)
-}
-
 func (s *Server) killPlayerLocked(player *Player, killer *Player, reason string, now time.Time) {
 	if !player.Alive {
 		return
 	}
 
+	if reason == "" {
+		reason = "destroyed"
+	}
+
 	player.Alive = false
+	player.PreDeathMass = player.Mass
 	player.Health = 0
 	player.RespawnAt = now.Add(s.cfg.RespawnDelay)
 	player.VX = 0
 	player.VY = 0
 	player.DeathReason = reason
+	player.SpawnInvulnerableUntil = time.Time{}
+	player.PendingSpawnSeparation = false
 	PlayerKills.Inc()
 	if killer != nil {
 		player.KilledBy = killer.Name
@@ -1110,28 +995,13 @@ func (s *Server) killPlayerLocked(player *Player, killer *Player, reason string,
 	}
 }
 
-func (s *Server) closestTargetLocked(source *Player, players []*Player) (*Player, float64) {
-	var target *Player
-	bestDistance := math.MaxFloat64
-	for _, candidate := range players {
-		if candidate.ID == source.ID || !candidate.Alive {
-			continue
-		}
-		distance := math.Hypot(candidate.X-source.X, candidate.Y-source.Y)
-		if distance < bestDistance {
-			bestDistance = distance
-			target = candidate
-		}
-	}
-	return target, bestDistance
-}
-
 func (s *Server) resetMatchLocked(now time.Time) {
 	s.lobby.MatchID = randomID("match")
 	s.lobby.MatchStart = now
 	s.lobby.MatchEnds = now.Add(s.cfg.MatchDuration)
 	s.lobby.MatchOver = false
 	s.lobby.Projectiles = nil
+	s.lobby.CrashPairs = make(map[string]time.Time)
 	s.lobby.KillFeed = s.lobby.KillFeed[:0]
 	s.spawnObjectsLocked()
 
@@ -1143,11 +1013,14 @@ func (s *Server) resetMatchLocked(now time.Time) {
 		player.Score = 0
 		player.Kills = 0
 		player.Mass = s.cfg.StartingMass
-		player.Health = s.cfg.StartingHealth
+		player.Health = s.maxHealthForMass(player.Mass)
 		player.Alive = true
 		player.RespawnAt = time.Time{}
 		player.DeathReason = ""
 		player.KilledBy = ""
+		player.PreDeathMass = 0
+		player.SpawnInvulnerableUntil = time.Time{}
+		player.PendingSpawnSeparation = false
 		player.VX = 0
 		player.VY = 0
 		s.spawnPlayerAtRandomPositionLocked(player)
@@ -1198,6 +1071,7 @@ func (s *Server) snapshotPlayersLocked(now time.Time) []snapshotPlayer {
 			Radius:      s.radiusForMass(player.Mass),
 			Angle:       player.Angle,
 			Health:      player.Health,
+			MaxHealth:   s.maxHealthForMass(player.Mass),
 			IsAlive:     player.Alive,
 			RespawnInMs: respawnIn,
 			IsBot:       player.IsBot,
@@ -1222,7 +1096,7 @@ func (s *Server) snapshotProjectilesLocked() []snapshotShot {
 	return shots
 }
 
-func buildSelfState(player *Player, now time.Time) *selfState {
+func (s *Server) buildSelfState(player *Player, now time.Time) *selfState {
 	respawnIn := int64(0)
 	if !player.RespawnAt.IsZero() && now.Before(player.RespawnAt) {
 		respawnIn = player.RespawnAt.Sub(now).Milliseconds()
@@ -1234,6 +1108,7 @@ func buildSelfState(player *Player, now time.Time) *selfState {
 		Score:       player.Score,
 		Mass:        player.Mass,
 		Health:      player.Health,
+		MaxHealth:   s.maxHealthForMass(player.Mass),
 		Kills:       player.Kills,
 		IsAlive:     player.Alive,
 		RespawnInMs: respawnIn,
@@ -1265,10 +1140,6 @@ func (connection *ClientConnection) writeJSON(payload any) error {
 
 	_ = connection.Socket.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	return connection.Socket.WriteJSON(payload)
-}
-
-func (s *Server) radiusForMass(mass float64) float64 {
-	return math.Sqrt(math.Max(mass, 1)) * s.cfg.PlayerRadiusScale
 }
 
 func randomID(prefix string) string {
@@ -1319,6 +1190,80 @@ func signPayload(payload []byte, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(payload)
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func normalizeConfig(cfg Config) Config {
+	if cfg.StartingMass <= 0 {
+		cfg.StartingMass = defaultStartingMass
+	}
+	if cfg.StartingHealth <= 0 {
+		cfg.StartingHealth = defaultStartingHealth
+	}
+
+	if cfg.HealthBase <= 0 {
+		cfg.HealthBase = cfg.StartingHealth
+	}
+	if cfg.HealthScale == 0 {
+		cfg.HealthScale = defaultHealthScale
+	}
+	if cfg.HealthMassScale <= 0 {
+		cfg.HealthMassScale = defaultHealthMassScale
+	}
+
+	if cfg.RadiusBase <= 0 {
+		if cfg.PlayerRadiusScale > 0 {
+			cfg.RadiusBase = math.Sqrt(math.Max(cfg.StartingMass, 1)) * cfg.PlayerRadiusScale
+		} else {
+			cfg.RadiusBase = defaultRadiusBase
+		}
+	}
+	if cfg.RadiusScale == 0 {
+		cfg.RadiusScale = defaultRadiusScale
+	}
+	if cfg.RadiusMassScale <= 0 {
+		cfg.RadiusMassScale = defaultRadiusMassScale
+	}
+
+	if cfg.CrashDamagePct <= 0 {
+		cfg.CrashDamagePct = defaultCrashDamagePct
+	}
+	if cfg.CrashPairCooldown <= 0 {
+		cfg.CrashPairCooldown = defaultCrashPairCooldown
+	}
+	if cfg.CrashKnockbackImpulse == 0 {
+		cfg.CrashKnockbackImpulse = defaultCrashKnockback
+	}
+	if cfg.KillMassTransferPct <= 0 {
+		cfg.KillMassTransferPct = defaultKillMassTransfer
+	}
+	if cfg.KillHealPct <= 0 {
+		cfg.KillHealPct = defaultKillHealPct
+	}
+	if cfg.RespawnRetentionPct <= 0 {
+		cfg.RespawnRetentionPct = defaultRespawnRetention
+	}
+	if cfg.SpawnInvulnerabilityDuration <= 0 {
+		cfg.SpawnInvulnerabilityDuration = defaultSpawnInvuln
+	}
+	if cfg.SpawnClearanceAttempts <= 0 {
+		cfg.SpawnClearanceAttempts = defaultSpawnAttempts
+	}
+	if cfg.PassiveHealPerSecond <= 0 {
+		cfg.PassiveHealPerSecond = defaultPassiveHealPerSec
+	}
+	if cfg.PassiveHealCombatDelay < 0 {
+		cfg.PassiveHealCombatDelay = 0
+	} else if cfg.PassiveHealCombatDelay == 0 {
+		cfg.PassiveHealCombatDelay = defaultPassiveHealDelay
+	}
+	if cfg.BotDifficultyMode == "" {
+		cfg.BotDifficultyMode = "weighted"
+	}
+	if cfg.BotDifficultyDistribution == "" {
+		cfg.BotDifficultyDistribution = "L0:10,L1:30,L2:40,L3:20"
+	}
+
+	return cfg
 }
 
 func envOrDefault(key, fallback string) string {

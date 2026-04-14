@@ -58,6 +58,7 @@ const snapshot: SnapshotMessage = {
       radius: 18,
       angle: 0,
       health: 100,
+      maxHealth: 100,
       isAlive: true,
       respawnInMs: 0,
       isBot: false,

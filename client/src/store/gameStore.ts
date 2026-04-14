@@ -30,6 +30,7 @@ export type SelfState = {
   score: number;
   mass: number;
   health: number;
+  maxHealth: number;
   kills: number;
   isAlive: boolean;
   respawnInMs: number;
