@@ -167,6 +167,25 @@ func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) HandleMatchmakingConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	assignment, err := s.selectLobbyAssignment(r.Context())
+	if err != nil {
+		http.Error(w, "game servers starting up, retry in a few seconds", http.StatusServiceUnavailable)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int{
+		"tickRate":     assignment.TickRate,
+		"snapshotRate": assignment.SnapshotRate,
+		"maxPlayers":   assignment.MaxPlayers,
+	})
+}
+
 func (s *Server) HandleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	LeaderboardReads.Inc()
 	if r.Method != http.MethodGet {

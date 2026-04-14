@@ -67,7 +67,20 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 	pipe := s.redis.TxPipeline()
 	pipe.HSet(ctx, podRegistryKey, s.cfg.PodIP, payload)
 	pipe.Set(ctx, heartbeatKey(s.cfg.PodIP), "1", s.cfg.RegistryHeartbeatTTL)
-	pipe.HSet(ctx, lobbyKey(s.cfg.LobbyID), "pod_ip", s.cfg.PodIP, "port", s.cfg.Port)
+	pipe.HSet(
+		ctx,
+		lobbyKey(s.cfg.LobbyID),
+		"pod_ip",
+		s.cfg.PodIP,
+		"port",
+		s.cfg.Port,
+		"tick_rate",
+		s.cfg.TickRate,
+		"snapshot_rate",
+		s.cfg.SnapshotRate,
+		"max_players",
+		s.cfg.MaxPlayers,
+	)
 	pipe.Expire(ctx, lobbyKey(s.cfg.LobbyID), s.cfg.LobbyTTL)
 	_, err = pipe.Exec(ctx)
 	return err

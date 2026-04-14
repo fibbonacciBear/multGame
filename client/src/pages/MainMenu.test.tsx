@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import MainMenu from "./MainMenu";
 
 const navigateMock = vi.fn();
@@ -14,12 +14,21 @@ vi.mock("react-router-dom", async () => {
 });
 
 describe("MainMenu", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
   it("loads leaderboard preview and joins a match", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve([{ playerName: "Ace", kills: 3, massBonus: 2, totalScore: 5 }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tickRate: 72, snapshotRate: 24, maxPlayers: 12 }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -39,6 +48,9 @@ describe("MainMenu", () => {
     );
 
     expect(await screen.findByText("Ace")).toBeTruthy();
+    expect(await screen.findByText("72 Hz")).toBeTruthy();
+    expect(await screen.findByText("24 Hz")).toBeTruthy();
+    expect(await screen.findByText("12")).toBeTruthy();
 
     fireEvent.change(screen.getByPlaceholderText("Pilot callsign"), {
       target: { value: "Pilot One" },
@@ -58,7 +70,7 @@ describe("MainMenu", () => {
     });
 
     expect(localStorage.getItem("multgame.playerName")).toBe("Pilot One");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("uses a default name when input is blank", async () => {
@@ -67,6 +79,10 @@ describe("MainMenu", () => {
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve([]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tickRate: 60, snapshotRate: 20, maxPlayers: 10 }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -102,7 +118,7 @@ describe("MainMenu", () => {
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.stringContaining("/api/matchmaking/join"),
       expect.objectContaining({
         method: "POST",

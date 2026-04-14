@@ -13,9 +13,12 @@ const podRegistryKey = "pod:registry"
 const registryStateReady = "ready"
 
 type lobbyAssignment struct {
-	LobbyID string
-	PodIP   string
-	Port    string
+	LobbyID      string
+	PodIP        string
+	Port         string
+	TickRate     int
+	SnapshotRate int
+	MaxPlayers   int
 }
 
 type registryRecord struct {
@@ -104,9 +107,12 @@ func (s *Server) loadLobbyAssignments(ctx context.Context) ([]lobbyAssignment, e
 
 		lobbyID := strings.TrimPrefix(key, "lobby:")
 		assignments = append(assignments, lobbyAssignment{
-			LobbyID: lobbyID,
-			PodIP:   values["pod_ip"],
-			Port:    values["port"],
+			LobbyID:      lobbyID,
+			PodIP:        values["pod_ip"],
+			Port:         values["port"],
+			TickRate:     envIntValue(values["tick_rate"], 60),
+			SnapshotRate: envIntValue(values["snapshot_rate"], 20),
+			MaxPlayers:   envIntValue(values["max_players"], 10),
 		})
 		return nil
 	})

@@ -33,6 +33,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.HandleHealthz)
+	mux.HandleFunc("/api/matchmaking/config", server.HandleMatchmakingConfig)
 	mux.HandleFunc("/api/matchmaking/join", server.HandleJoin)
 	mux.HandleFunc("/api/leaderboard", server.HandleLeaderboard)
 	mux.HandleFunc("/api/leaderboard/report", server.HandleLeaderboardReport)

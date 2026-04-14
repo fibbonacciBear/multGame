@@ -5,6 +5,11 @@ import type { MatchJoinResponse } from "../engine/types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const DEFAULT_PLAYER_NAME = "Pilot";
+const DEFAULT_MATCHMAKING_CONFIG = {
+  tickRate: 60,
+  snapshotRate: 20,
+  maxPlayers: 10,
+};
 
 export default function MainMenu() {
   const navigate = useNavigate();
@@ -12,6 +17,7 @@ export default function MainMenu() {
   const [region, setRegion] = useState("local");
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState<string>();
+  const [matchmakingConfig, setMatchmakingConfig] = useState(DEFAULT_MATCHMAKING_CONFIG);
   const leaderboardPreview = useGameStore((state) => state.leaderboardPreview);
   const setLeaderboardPreview = useGameStore((state) => state.setLeaderboardPreview);
   const setStoredPlayerName = useGameStore((state) => state.setPlayerName);
@@ -30,7 +36,29 @@ export default function MainMenu() {
       }
     }
 
+    async function loadMatchmakingConfig() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/matchmaking/config`);
+        if (!response.ok) {
+          throw new Error("Matchmaking config request failed");
+        }
+        const config = (await response.json()) as {
+          tickRate: number;
+          snapshotRate: number;
+          maxPlayers: number;
+        };
+        setMatchmakingConfig({
+          tickRate: config.tickRate,
+          snapshotRate: config.snapshotRate,
+          maxPlayers: config.maxPlayers,
+        });
+      } catch {
+        setMatchmakingConfig(DEFAULT_MATCHMAKING_CONFIG);
+      }
+    }
+
     void loadLeaderboardPreview();
+    void loadMatchmakingConfig();
   }, [setLeaderboardPreview]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -77,16 +105,16 @@ export default function MainMenu() {
           </p>
           <div className="stat-row">
             <div className="stat-pill">
-              <strong>60 Hz</strong>
+              <strong>{matchmakingConfig.tickRate} Hz</strong>
               <span className="muted">authoritative simulation</span>
             </div>
             <div className="stat-pill">
-              <strong>20 Hz</strong>
+              <strong>{matchmakingConfig.snapshotRate} Hz</strong>
               <span className="muted">snapshot broadcast cadence</span>
             </div>
             <div className="stat-pill">
-              <strong>10-20</strong>
-              <span className="muted">players per lobby with bot fill</span>
+              <strong>{matchmakingConfig.maxPlayers}</strong>
+              <span className="muted">max players per lobby with bot fill</span>
             </div>
           </div>
         </div>
