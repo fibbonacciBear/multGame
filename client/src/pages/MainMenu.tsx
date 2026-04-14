@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import type { MatchJoinResponse } from "../engine/types";
@@ -14,9 +14,58 @@ export default function MainMenu() {
   const [isRegionMenuOpen, setIsRegionMenuOpen] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState<string>();
+  const [isNameFocused, setIsNameFocused] = useState(false);
+  const [hasRangeSelection, setHasRangeSelection] = useState(false);
+  const [caretIndex, setCaretIndex] = useState(playerName.length);
+  const [cursorOffsetPx, setCursorOffsetPx] = useState(0);
+  const [isCursorVisible, setIsCursorVisible] = useState(true);
+  const [cursorBlinkSeed, setCursorBlinkSeed] = useState(0);
+  const cursorMeasureRef = useRef<HTMLSpanElement>(null);
   const setStoredPlayerName = useGameStore((state) => state.setPlayerName);
   const selectedRegionLabel =
     AVAILABLE_REGIONS.find((entry) => entry.value === region)?.label ?? AVAILABLE_REGIONS[0].label;
+  const shouldShowBlockCursor = isNameFocused && !hasRangeSelection;
+  const cursorCharacter = playerName.charAt(caretIndex) || "\u00a0";
+
+  useLayoutEffect(() => {
+    setCursorOffsetPx(cursorMeasureRef.current?.getBoundingClientRect().width ?? 0);
+  }, [caretIndex, playerName]);
+
+  useEffect(() => {
+    if (!shouldShowBlockCursor) {
+      return;
+    }
+
+    setIsCursorVisible(true);
+
+    let blinkIntervalId: number | undefined;
+    const idleTimeoutId = window.setTimeout(() => {
+      setIsCursorVisible(false);
+      blinkIntervalId = window.setInterval(() => {
+        setIsCursorVisible((current) => !current);
+      }, 500);
+    }, 520);
+
+    return () => {
+      window.clearTimeout(idleTimeoutId);
+      if (blinkIntervalId !== undefined) {
+        window.clearInterval(blinkIntervalId);
+      }
+    };
+  }, [shouldShowBlockCursor, cursorBlinkSeed]);
+
+  function resetCursorBlink() {
+    setIsCursorVisible(true);
+    setCursorBlinkSeed((current) => current + 1);
+  }
+
+  function syncCaretFromInput(inputElement: HTMLInputElement) {
+    const selectionStart = inputElement.selectionStart ?? inputElement.value.length;
+    const selectionEnd = inputElement.selectionEnd ?? selectionStart;
+    setCaretIndex(selectionStart);
+    setHasRangeSelection(selectionStart !== selectionEnd);
+    resetCursorBlink();
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -52,7 +101,7 @@ export default function MainMenu() {
 
   return (
     <section className="menu-shell">
-      <p className="terminal-brand">astrodrift</p>
+      <p className="terminal-brand">astrodrift.io</p>
       <section className="card matchmaking-card">
         <div className="menu-status-row">
           <span>drift console // low-light transit</span>
@@ -71,13 +120,43 @@ export default function MainMenu() {
           }}
         >
           <label className="stack">
-            <span>Callsign</span>
-            <input
-              maxLength={18}
-              placeholder="your name"
-              value={playerName}
-              onChange={(event) => setPlayerName(event.target.value)}
-            />
+            <span className="field-label">Callsign</span>
+            <div className="terminal-input-wrap">
+              <input
+                maxLength={18}
+                placeholder="your name"
+                value={playerName}
+                onChange={(event) => {
+                  setPlayerName(event.target.value);
+                  syncCaretFromInput(event.target);
+                }}
+                onFocus={(event) => {
+                  setIsNameFocused(true);
+                  syncCaretFromInput(event.target);
+                }}
+                onBlur={() => {
+                  setIsNameFocused(false);
+                  setHasRangeSelection(false);
+                  setIsCursorVisible(false);
+                }}
+                onSelect={(event) => syncCaretFromInput(event.currentTarget)}
+                onClick={(event) => syncCaretFromInput(event.currentTarget)}
+                onKeyDown={(event) => syncCaretFromInput(event.currentTarget)}
+                onKeyUp={(event) => syncCaretFromInput(event.currentTarget)}
+              />
+              <span className="terminal-input-cursor-track" aria-hidden>
+                <span ref={cursorMeasureRef}>{playerName.slice(0, caretIndex)}</span>
+              </span>
+              <span
+                className={`terminal-input-cursor-block${
+                  shouldShowBlockCursor && isCursorVisible ? " visible" : " hidden"
+                }`}
+                style={{ left: `calc(1px + var(--terminal-input-pad-x) + ${cursorOffsetPx}px)` }}
+                aria-hidden
+              >
+                {cursorCharacter}
+              </span>
+            </div>
           </label>
 
           <div className="form-actions">
