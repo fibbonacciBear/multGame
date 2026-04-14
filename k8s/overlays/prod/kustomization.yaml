@@ -28,13 +28,13 @@ generatorOptions:
 images:
   - name: multgame/game-server
     newName: ghcr.io/fibbonaccibear/multgame-game-server
-    newTag: latest
+    newTag: sha-cc89206fab5a952fee7cb4f76eb9e6fe7fc44866
   - name: multgame/api-server
     newName: ghcr.io/fibbonaccibear/multgame-api-server
-    newTag: latest
+    newTag: sha-cc89206fab5a952fee7cb4f76eb9e6fe7fc44866
   - name: multgame/ws-router
     newName: ghcr.io/fibbonaccibear/multgame-ws-router
-    newTag: latest
+    newTag: sha-cc89206fab5a952fee7cb4f76eb9e6fe7fc44866
   - name: multgame/web-client
     newName: ghcr.io/fibbonaccibear/multgame-web-client
-    newTag: latest
+    newTag: sha-cc89206fab5a952fee7cb4f76eb9e6fe7fc44866
