@@ -22,16 +22,15 @@ services:
   game-server:
     build:
       context: ./server
+    env_file:
+      - ./config/game-server.env
+      - ./config/game-server.local.env
     environment:
       PORT: "8080"
       JWT_SECRET: dev-secret
       REPORT_SHARED_SECRET: dev-report-secret
       API_SERVER_URL: http://api-server:8081
       LOBBY_ID: local-lobby
-      MATCH_DURATION: 5m
-      RESPAWN_DELAY: 2s
-      BOT_FILL_DELAY: 5s
-      MAX_PLAYERS: "10"
     depends_on:
       - api-server
     ports:
