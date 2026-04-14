@@ -19,17 +19,9 @@ describe("MainMenu", () => {
     localStorage.clear();
   });
 
-  it("loads leaderboard preview and joins a match", async () => {
+  it("joins a match from the main menu", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve([{ playerName: "Ace", kills: 3, massBonus: 2, totalScore: 5 }]),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ tickRate: 72, snapshotRate: 24, maxPlayers: 12 }),
-      })
       .mockResolvedValueOnce({
         ok: true,
         json: () =>
@@ -47,15 +39,12 @@ describe("MainMenu", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText("Ace")).toBeTruthy();
-    expect(await screen.findByText("72 Hz")).toBeTruthy();
-    expect(await screen.findByText("24 Hz")).toBeTruthy();
-    expect(await screen.findByText("12")).toBeTruthy();
+    expect(screen.getByText("somewhere between the stars")).toBeTruthy();
 
-    fireEvent.change(screen.getByPlaceholderText("Pilot callsign"), {
+    fireEvent.change(screen.getByPlaceholderText("your name"), {
       target: { value: "Pilot One" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    fireEvent.click(screen.getByRole("button", { name: "Drift" }));
 
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith("/game", {
@@ -70,20 +59,24 @@ describe("MainMenu", () => {
     });
 
     expect(localStorage.getItem("multgame.playerName")).toBe("Pilot One");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows region selector options from choose region button", () => {
+    render(
+      <MemoryRouter>
+        <MainMenu />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Region: Local" }));
+    expect(screen.getByRole("menu", { name: "Region options" })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: "Local" })).toBeTruthy();
   });
 
   it("uses a default name when input is blank", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve([]),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ tickRate: 60, snapshotRate: 20, maxPlayers: 10 }),
-      })
       .mockResolvedValueOnce({
         ok: true,
         json: () =>
@@ -101,9 +94,7 @@ describe("MainMenu", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText("No posted results yet.");
-
-    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    fireEvent.click(screen.getByRole("button", { name: "Drift" }));
 
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith("/game", {
@@ -118,7 +109,7 @@ describe("MainMenu", () => {
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
+      1,
       expect.stringContaining("/api/matchmaking/join"),
       expect.objectContaining({
         method: "POST",

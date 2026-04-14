@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=VT323&display=swap");
+
 :root {
   color-scheme: dark;
   --bg: #090d14;
@@ -80,6 +82,44 @@ select {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  position: relative;
+}
+
+.app-shell-menu::before {
+  background:
+    radial-gradient(circle at 50% 40%, rgba(6, 28, 64, 0.56), transparent 52%),
+    radial-gradient(circle at 18% 24%, rgba(10, 43, 82, 0.2), transparent 35%),
+    radial-gradient(circle at 84% 80%, rgba(8, 37, 71, 0.2), transparent 42%),
+    linear-gradient(180deg, #02040a 0%, #020712 52%, #01040a 100%);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: 0;
+}
+
+.app-shell-menu::after {
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(190, 220, 255, 0.02) 0,
+      rgba(190, 220, 255, 0.02) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    linear-gradient(90deg, rgba(21, 53, 101, 0.06), rgba(7, 16, 34, 0.24), rgba(21, 53, 101, 0.06));
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  animation: terminal-flicker 18s ease-in-out infinite, scanline-drift 20s linear infinite;
+  z-index: 0;
+}
+
+.topbar,
+.app-main {
+  position: relative;
+  z-index: 1;
 }
 
 .topbar {
@@ -88,6 +128,16 @@ select {
   justify-content: space-between;
   gap: 2rem;
   padding: 1.5rem clamp(1rem, 4vw, 3rem) 1rem;
+}
+
+.topbar-brand-only {
+  justify-content: center;
+  padding-bottom: 0.35rem;
+  text-align: center;
+}
+
+.topbar-brand-only h1 {
+  margin-top: 0.2rem;
 }
 
 .topbar h1 {
@@ -127,10 +177,44 @@ select {
   padding: 0 clamp(1rem, 4vw, 3rem) clamp(1rem, 3vw, 2.5rem);
 }
 
-.page-grid {
+.menu-shell {
+  align-items: center;
   display: grid;
-  gap: 1.2rem;
-  grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+  justify-items: center;
+  min-height: calc(100vh - 160px);
+  padding: clamp(1.25rem, 4vw, 2.5rem) 0;
+  position: relative;
+}
+
+.terminal-brand {
+  color: #79f2a8;
+  font-family: "VT323", "JetBrains Mono", "Courier New", monospace;
+  font-size: clamp(2rem, 5vw, 3.2rem);
+  letter-spacing: 0.12em;
+  line-height: 1;
+  margin: 0 0 1rem;
+  text-transform: lowercase;
+  text-shadow: 0 0 14px rgba(121, 242, 168, 0.22);
+}
+
+.app-shell-menu .topbar-brand-only {
+  padding-bottom: 0.15rem;
+}
+
+.app-shell-menu .topbar-brand-only h1 {
+  color: rgba(229, 238, 255, 0.78);
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
+  font-size: clamp(2rem, 4.8vw, 3.2rem);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  margin-top: 0.35rem;
+  text-transform: uppercase;
+}
+
+.app-shell-menu .topbar-brand-only .eyebrow {
+  color: rgba(197, 213, 241, 0.68);
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
+  letter-spacing: 0.26em;
 }
 
 .card {
@@ -149,58 +233,196 @@ select {
   margin-top: 0;
 }
 
-.hero-card {
-  min-height: 480px;
-  overflow: hidden;
+.matchmaking-card {
+  margin: 0 auto;
+  max-width: 420px;
+  padding: clamp(1.1rem, 2vw, 1.6rem);
+  padding-bottom: clamp(3.1rem, 4vw, 3.6rem);
   position: relative;
+  width: min(100%, 420px);
+  z-index: 1;
 }
 
-.hero-card::after {
+.app-shell-menu .matchmaking-card {
+  backdrop-filter: blur(8px);
   background:
-    linear-gradient(125deg, rgba(104, 225, 253, 0.22), transparent 40%),
-    radial-gradient(circle at 85% 25%, rgba(255, 107, 125, 0.18), transparent 35%);
+    linear-gradient(180deg, rgba(2, 10, 25, 0.84), rgba(1, 7, 19, 0.65)),
+    radial-gradient(circle at 50% 0%, rgba(49, 92, 156, 0.17), transparent 62%);
+  border: 1px solid rgba(116, 146, 194, 0.3);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 0 0 1px rgba(142, 174, 224, 0.08),
+    0 30px 70px rgba(0, 0, 0, 0.55);
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
+  animation: panel-hum 8s ease-in-out infinite;
+}
+
+.app-shell-menu .matchmaking-card::before {
+  background:
+    linear-gradient(90deg, rgba(125, 157, 213, 0.15), transparent 10% 90%, rgba(125, 157, 213, 0.15)),
+    linear-gradient(180deg, rgba(125, 157, 213, 0.12), transparent 8% 92%, rgba(125, 157, 213, 0.12));
+  border-radius: 10px;
   content: "";
-  inset: 0;
+  inset: 0.65rem;
   pointer-events: none;
   position: absolute;
 }
 
-.hero-content {
-  position: relative;
-  z-index: 1;
+.menu-status-row {
+  align-items: center;
+  display: flex;
+  font-size: 0.68rem;
+  justify-content: space-between;
+  letter-spacing: 0.14em;
+  margin-bottom: 0.95rem;
+  opacity: 0.85;
+  text-transform: uppercase;
 }
 
-.hero-content h2 {
-  font-size: clamp(2.2rem, 5vw, 4.4rem);
-  line-height: 0.95;
+.app-shell-menu .menu-status-row {
+  color: rgba(164, 186, 223, 0.62);
+}
+
+.matchmaking-card h2 {
+  font-size: clamp(1.45rem, 3vw, 1.95rem);
+  letter-spacing: -0.02em;
+  margin-bottom: 0.3rem;
+}
+
+.app-shell-menu .matchmaking-card .eyebrow {
+  color: rgba(177, 201, 236, 0.75);
+  letter-spacing: 0.2em;
+}
+
+.app-shell-menu .matchmaking-card h2 {
+  color: #79f2a8;
+  font-size: clamp(1.05rem, 2.5vw, 1.32rem);
+  font-family: "VT323", "JetBrains Mono", "Courier New", monospace;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  line-height: 1.08;
+  text-transform: lowercase;
+  white-space: nowrap;
+  text-shadow: 0 0 14px rgba(121, 242, 168, 0.22);
+}
+
+.terminal-title-box h2::after {
+  animation: terminal-cursor 1.1s steps(1, end) infinite;
+  content: "_";
+  margin-left: 0.22rem;
+}
+
+.menu-copy {
   margin-bottom: 1rem;
-  max-width: 8ch;
+  max-width: 32ch;
 }
 
-.hero-content p {
+.terminal-title-box {
+  background: linear-gradient(180deg, rgba(6, 20, 18, 0.7), rgba(5, 16, 15, 0.4));
+  border: 1px solid rgba(121, 242, 168, 0.25);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem 0.35rem;
+  width: 100%;
+}
+
+.app-shell-menu .menu-copy {
+  color: rgba(169, 189, 224, 0.62);
+  font-size: 0.84rem;
+  letter-spacing: 0.06em;
+  margin-bottom: 1.15rem;
+}
+
+.corner-region-button {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  bottom: 1rem;
   color: var(--muted);
-  font-size: 1.02rem;
-  max-width: 46ch;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.45rem 0.8rem;
+  position: absolute;
+  right: 1rem;
 }
 
-.stat-row {
+.app-shell-menu .corner-region-button {
+  background: transparent;
+  border: 1px solid rgba(116, 146, 194, 0.4);
+  border-radius: 4px;
+  color: rgba(179, 198, 230, 0.7);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  padding: 0.4rem 0.65rem;
+  text-transform: uppercase;
+}
+
+.corner-region-button:hover:not(:disabled) {
+  box-shadow: none;
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.app-shell-menu .corner-region-button:hover:not(:disabled) {
+  color: rgba(228, 238, 255, 0.84);
+}
+
+.region-menu {
+  background: rgba(7, 14, 24, 0.96);
+  border: 1px solid rgba(147, 190, 255, 0.28);
+  border-radius: 14px;
+  bottom: 3.5rem;
   display: grid;
-  gap: 0.8rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 2rem;
+  gap: 0.35rem;
+  min-width: 130px;
+  padding: 0.4rem;
+  position: absolute;
+  right: 1rem;
+  z-index: 2;
 }
 
-.stat-pill {
+.app-shell-menu .region-menu {
+  background: rgba(2, 8, 18, 0.96);
+  border: 1px solid rgba(116, 146, 194, 0.38);
+  border-radius: 6px;
+}
+
+.region-menu-item {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+}
+
+.app-shell-menu .region-menu-item {
+  border-radius: 4px;
+  color: rgba(174, 194, 228, 0.76);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.region-menu-item:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 22px;
-  padding: 0.95rem;
+  box-shadow: none;
+  color: var(--text);
 }
 
-.stat-pill strong {
-  display: block;
-  font-size: 1.4rem;
-  margin-bottom: 0.2rem;
+.app-shell-menu .region-menu-item:hover:not(:disabled) {
+  background: rgba(116, 146, 194, 0.16);
+  color: rgba(228, 238, 255, 0.88);
+  transform: none;
+}
+
+.region-menu-item.active {
+  border-color: rgba(104, 225, 253, 0.34);
+  color: var(--text);
+}
+
+.app-shell-menu .region-menu-item.active {
+  border-color: rgba(149, 179, 228, 0.5);
 }
 
 .form-stack,
@@ -209,15 +431,139 @@ select {
   gap: 1rem;
 }
 
+.app-shell-menu .matchmaking-card label span {
+  color: rgba(175, 194, 226, 0.78);
+  font-size: 0.76rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.app-shell-menu .matchmaking-card input {
+  border: 1px solid rgba(104, 131, 178, 0.4);
+  border-radius: 2px;
+  color: rgba(228, 237, 255, 0.84);
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
+  letter-spacing: 0.12em;
+  padding: 0.82rem 0.9rem;
+  text-transform: lowercase;
+}
+
+.app-shell-menu .matchmaking-card input::placeholder {
+  color: rgba(153, 176, 215, 0.46);
+}
+
 .form-actions {
   align-items: center;
   display: flex;
   gap: 0.8rem;
 }
 
+.app-shell-menu .form-actions button {
+  background: transparent;
+  border: 1px solid rgba(126, 155, 205, 0.52);
+  border-radius: 2px;
+  color: rgba(214, 227, 252, 0.84);
+  letter-spacing: 0.28em;
+  min-width: 100%;
+  padding: 0.72rem 1rem;
+  text-transform: uppercase;
+}
+
+.app-shell-menu .form-actions button:hover:not(:disabled) {
+  background: rgba(90, 122, 177, 0.13);
+  box-shadow: none;
+}
+
+.menu-footer-meta {
+  display: flex;
+  font-size: 0.66rem;
+  justify-content: space-between;
+  letter-spacing: 0.14em;
+  margin-top: 1rem;
+  opacity: 0.8;
+  text-transform: uppercase;
+}
+
+.app-shell-menu .menu-footer-meta {
+  color: rgba(158, 181, 220, 0.58);
+}
+
 .hint,
 .muted {
   color: var(--muted);
+}
+
+@keyframes terminal-flicker {
+  0%,
+  100% {
+    opacity: 0.38;
+  }
+  12% {
+    opacity: 0.49;
+  }
+  25% {
+    opacity: 0.35;
+  }
+  39% {
+    opacity: 0.5;
+  }
+  53% {
+    opacity: 0.33;
+  }
+  68% {
+    opacity: 0.47;
+  }
+  82% {
+    opacity: 0.36;
+  }
+  93% {
+    opacity: 0.51;
+  }
+}
+
+@keyframes scanline-drift {
+  0% {
+    background-position: 0 0, 0 0;
+  }
+  100% {
+    background-position: 0 120px, 0 0;
+  }
+}
+
+@keyframes panel-hum {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 1px rgba(142, 174, 224, 0.08),
+      0 30px 70px rgba(0, 0, 0, 0.55);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px rgba(142, 174, 224, 0.11),
+      0 34px 74px rgba(0, 0, 0, 0.58);
+  }
+}
+
+@keyframes terminal-cursor {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  46%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-menu::after,
+  .app-shell-menu .matchmaking-card {
+    animation: none;
+  }
+
+  .terminal-title-box h2::after {
+    animation: none;
+  }
 }
 
 .danger {
@@ -398,10 +744,6 @@ select {
 }
 
 @media (max-width: 980px) {
-  .page-grid {
-    grid-template-columns: 1fr;
-  }
-
   .hud {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     right: 1rem;
@@ -425,6 +767,11 @@ select {
   .topnav a {
     flex: 1;
     text-align: center;
+  }
+
+  .form-actions {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .game-stage canvas {
