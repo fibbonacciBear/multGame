@@ -189,42 +189,28 @@ select {
 }
 
 .menu-shell::before {
-  background:
-    radial-gradient(circle at 8% 18%, rgba(205, 228, 255, 0.85) 0 1px, transparent 1.7px),
-    radial-gradient(circle at 18% 62%, rgba(179, 212, 255, 0.8) 0 1px, transparent 1.7px),
-    radial-gradient(circle at 24% 38%, rgba(173, 200, 255, 0.75) 0 1.2px, transparent 1.9px),
-    radial-gradient(circle at 31% 12%, rgba(204, 231, 255, 0.72) 0 1px, transparent 1.6px),
-    radial-gradient(circle at 42% 74%, rgba(181, 214, 255, 0.72) 0 1px, transparent 1.7px),
-    radial-gradient(circle at 55% 27%, rgba(182, 209, 255, 0.85) 0 1.1px, transparent 1.8px),
-    radial-gradient(circle at 64% 52%, rgba(209, 232, 255, 0.7) 0 1px, transparent 1.6px),
-    radial-gradient(circle at 71% 34%, rgba(175, 206, 255, 0.74) 0 1.1px, transparent 1.8px),
-    radial-gradient(circle at 79% 66%, rgba(180, 219, 255, 0.78) 0 1px, transparent 1.7px),
-    radial-gradient(circle at 88% 22%, rgba(195, 229, 255, 0.82) 0 1px, transparent 1.6px),
-    radial-gradient(circle at 92% 86%, rgba(177, 215, 255, 0.7) 0 1.1px, transparent 1.8px);
+  background: var(--menu-stars-ambient, none);
   content: "";
   filter: drop-shadow(0 0 3px rgba(150, 194, 255, 0.26));
   inset: 0;
   opacity: 0.75;
   pointer-events: none;
-  position: absolute;
+  position: fixed;
   z-index: 0;
-  animation: star-twinkle 9s ease-in-out infinite alternate;
+  animation: star-twinkle-soft 11s ease-in-out infinite alternate;
 }
 
 .menu-shell::after {
   background:
-    radial-gradient(circle at 14% 29%, rgba(219, 237, 255, 0.95) 0 2px, transparent 3.4px),
-    radial-gradient(circle at 38% 78%, rgba(204, 229, 255, 0.9) 0 1.8px, transparent 3.1px),
-    radial-gradient(circle at 62% 16%, rgba(216, 236, 255, 0.92) 0 2.2px, transparent 3.7px),
-    radial-gradient(circle at 84% 58%, rgba(221, 239, 255, 0.9) 0 2px, transparent 3.3px),
+    var(--menu-stars-hero, none),
     radial-gradient(80% 42% at 50% 50%, rgba(86, 121, 192, 0.12), transparent 72%);
   content: "";
   inset: 0;
   opacity: 0.52;
   pointer-events: none;
-  position: absolute;
+  position: fixed;
   z-index: 0;
-  animation: deep-space-drift 18s ease-in-out infinite;
+  animation: star-twinkle-bright 7.5s ease-in-out infinite alternate, deep-space-drift 18s ease-in-out infinite;
 }
 
 .menu-shell > * {
@@ -642,15 +628,27 @@ select {
   }
 }
 
-@keyframes star-twinkle {
+@keyframes star-twinkle-soft {
   0% {
-    opacity: 0.55;
+    opacity: 0.52;
   }
   50% {
-    opacity: 0.82;
+    opacity: 0.8;
   }
   100% {
-    opacity: 0.62;
+    opacity: 0.6;
+  }
+}
+
+@keyframes star-twinkle-bright {
+  0% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.66;
+  }
+  100% {
+    opacity: 0.46;
   }
 }
 
