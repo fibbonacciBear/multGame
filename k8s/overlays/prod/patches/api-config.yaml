@@ -3,4 +3,4 @@ kind: ConfigMap
 metadata:
   name: api-server-config
 data:
-  WS_ROUTER_BASE_URL: "wss://game.example.com/ws"
+  WS_ROUTER_BASE_URL: "wss://astrodrift.io/ws"

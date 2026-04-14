@@ -9,7 +9,7 @@ import { startGameEngine } from "../engine";
 import type { MatchJoinResponse, SnapshotMessage } from "../engine/types";
 import { useGameStore } from "../store/gameStore";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8081";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 type GameLocationState = {
   match?: MatchJoinResponse;

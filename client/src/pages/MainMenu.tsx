@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useGameStore, type LeaderboardEntry } from "../store/gameStore";
 import type { MatchJoinResponse } from "../engine/types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8081";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export default function MainMenu() {
   const navigate = useNavigate();
