@@ -10,3 +10,4 @@ server/.cache
 *.exe
 server/bin/
 api/bin/
+config/game-server.local.env

@@ -23,8 +23,10 @@ services:
     build:
       context: ./server
     env_file:
-      - ./config/game-server.env
-      - ./config/game-server.local.env
+      - path: ./config/game-server.env
+        required: true
+      - path: ./config/game-server.local.env
+        required: false
     environment:
       PORT: "8080"
       JWT_SECRET: dev-secret
