@@ -443,7 +443,6 @@ select {
   letter-spacing: 0.08em;
   line-height: 1.1;
   padding: var(--terminal-input-pad-y) var(--terminal-input-pad-x);
-  text-transform: lowercase;
   text-shadow: 0 0 10px rgba(121, 242, 168, 0.2);
 }
 
@@ -463,7 +462,6 @@ select {
   padding: var(--terminal-input-pad-y) var(--terminal-input-pad-x);
   pointer-events: none;
   position: absolute;
-  text-transform: lowercase;
   visibility: hidden;
   white-space: pre;
 }
