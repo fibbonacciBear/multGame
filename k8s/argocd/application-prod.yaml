@@ -10,6 +10,10 @@ metadata:
     argocd-image-updater.argoproj.io/api-server.update-strategy: newest-build
     argocd-image-updater.argoproj.io/ws-router.update-strategy: newest-build
     argocd-image-updater.argoproj.io/web-client.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/game-server.kustomize.image-name: multgame/game-server
+    argocd-image-updater.argoproj.io/api-server.kustomize.image-name: multgame/api-server
+    argocd-image-updater.argoproj.io/ws-router.kustomize.image-name: multgame/ws-router
+    argocd-image-updater.argoproj.io/web-client.kustomize.image-name: multgame/web-client
     argocd-image-updater.argoproj.io/game-server.allow-tags: regexp:^sha-[a-f0-9]{40}$
     argocd-image-updater.argoproj.io/api-server.allow-tags: regexp:^sha-[a-f0-9]{40}$
     argocd-image-updater.argoproj.io/ws-router.allow-tags: regexp:^sha-[a-f0-9]{40}$
