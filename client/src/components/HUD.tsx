@@ -10,9 +10,6 @@ function formatTimer(ms: number) {
 export default function HUD() {
   const self = useGameStore((state) => state.self);
   const matchTimerMs = useGameStore((state) => state.matchTimerMs);
-  const health = self?.health ?? 0;
-  const maxHealth = self?.maxHealth ?? 100;
-  const healthPct = maxHealth > 0 ? Math.round((health / maxHealth) * 100) : 0;
 
   return (
     <div className="hud">
@@ -27,18 +24,6 @@ export default function HUD() {
       <section className="hud-panel">
         <span>Timer</span>
         <strong>{formatTimer(matchTimerMs)}</strong>
-      </section>
-      <section className="hud-panel">
-        <span>Health</span>
-        <strong>{`${Math.round(health)} / ${Math.round(maxHealth)} (${healthPct}%)`}</strong>
-      </section>
-      <section className="hud-panel">
-        <span>Kills</span>
-        <strong>{self?.kills ?? 0}</strong>
-      </section>
-      <section className="hud-panel">
-        <span>Status</span>
-        <strong>{self?.isAlive ? "Active" : "Respawning"}</strong>
       </section>
     </div>
   );

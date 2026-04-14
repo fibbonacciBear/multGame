@@ -179,6 +179,11 @@ select {
   padding: 0 clamp(1rem, 4vw, 3rem) clamp(1rem, 3vw, 2.5rem);
 }
 
+.app-shell-game .app-main {
+  display: flex;
+  padding: 0;
+}
+
 .menu-shell {
   align-items: center;
   display: grid;
@@ -718,29 +723,40 @@ select {
 }
 
 .game-shell {
-  display: grid;
-  gap: 1rem;
+  display: flex;
+  min-height: calc(100vh - clamp(1rem, 3vw, 2.5rem));
 }
 
 .game-stage {
   border: 1px solid var(--border);
   border-radius: 28px;
+  flex: 1;
   overflow: hidden;
   position: relative;
-  min-height: 70vh;
+  min-height: 0;
   background:
     radial-gradient(circle at center, rgba(17, 27, 40, 0.45), transparent 50%),
     #040811;
 }
 
+.app-shell-game .game-shell {
+  min-height: 100%;
+  width: 100%;
+}
+
+.app-shell-game .game-stage {
+  border-radius: 0;
+}
+
 .game-stage canvas {
   display: block;
-  height: 70vh;
+  height: 100%;
   width: 100%;
 }
 
 .overlay,
 .hud,
+.live-leaderboard,
 .kill-feed,
 .notice-banner,
 .scoreboard-overlay,
@@ -759,15 +775,16 @@ select {
 
 .hud-panel,
 .notice-banner,
+.live-leaderboard,
 .kill-feed,
 .death-overlay,
 .scoreboard-overlay,
 .minimap-card {
-  backdrop-filter: blur(18px);
-  background: var(--bg-soft);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: none;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 22px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .hud-panel {
@@ -789,10 +806,40 @@ select {
 }
 
 .kill-feed {
+  bottom: 1rem;
+  left: 1rem;
+  padding: 0.8rem 0.9rem;
+  right: auto;
+  top: auto;
+  width: min(320px, calc(100% - 2rem));
+}
+
+.live-leaderboard {
   padding: 0.8rem 0.9rem;
   right: 1rem;
   top: 1rem;
-  width: min(320px, calc(100% - 2rem));
+  width: min(260px, calc(100% - 2rem));
+}
+
+.live-leaderboard ul {
+  display: grid;
+  gap: 0.55rem;
+  list-style: none;
+  margin: 0.7rem 0 0;
+  padding: 0;
+}
+
+.live-leaderboard li {
+  align-items: center;
+  color: var(--muted);
+  display: grid;
+  font-size: 0.92rem;
+  gap: 0.7rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.live-leaderboard li strong {
+  color: var(--text);
 }
 
 .kill-feed ul {
@@ -889,7 +936,7 @@ select {
   }
 
   .game-stage canvas {
-    height: 78vh;
+    height: 100%;
   }
 
   .hud {
@@ -901,10 +948,16 @@ select {
 
   .kill-feed {
     left: 0.75rem;
-    right: 0.75rem;
+    right: auto;
     top: auto;
-    width: auto;
+    width: min(320px, calc(100% - 1.5rem));
     bottom: 0.75rem;
+  }
+
+  .live-leaderboard {
+    right: 0.75rem;
+    top: 0.75rem;
+    width: min(240px, calc(100% - 1.5rem));
   }
 
   .notice-banner {
