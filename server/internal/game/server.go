@@ -28,20 +28,20 @@ import (
 )
 
 const (
-	worldWidth        = 4000
-	worldHeight       = 4000
-	gravityAccel      = 2400
-	drag              = 0.98
-	terminalSpeed     = 900
-	playerRadiusScale = 3
-	numObjects        = 200
-	startingMass      = 10
-	startingHealth    = 100
-	projectileSpeed   = 1250
-	projectileDamage  = 28
-	projectileRadius  = 5
-	shootCooldown     = 250 * time.Millisecond
-	projectileTTL     = 1200 * time.Millisecond
+	defaultWorldWidth        = 4000
+	defaultWorldHeight       = 4000
+	defaultGravityAccel      = 2400
+	defaultDrag              = 0.98
+	defaultTerminalSpeed     = 900
+	defaultPlayerRadiusScale = 3
+	defaultNumObjects        = 200
+	defaultStartingMass      = 10
+	defaultStartingHealth    = 100
+	defaultProjectileSpeed   = 1250
+	defaultProjectileDamage  = 28
+	defaultProjectileRadius  = 5
+	defaultShootCooldown     = 250 * time.Millisecond
+	defaultProjectileTTL     = 1200 * time.Millisecond
 )
 
 var palette = []string{
@@ -66,6 +66,20 @@ type Config struct {
 	TickRate                  int
 	SnapshotRate              int
 	MaxPlayers                int
+	WorldWidth                float64
+	WorldHeight               float64
+	GravityAccel              float64
+	Drag                      float64
+	TerminalSpeed             float64
+	PlayerRadiusScale         float64
+	NumObjects                int
+	StartingMass              float64
+	StartingHealth            float64
+	ProjectileSpeed           float64
+	ProjectileDamage          float64
+	ProjectileRadius          float64
+	ShootCooldown             time.Duration
+	ProjectileTTL             time.Duration
 	MatchDuration             time.Duration
 	RespawnDelay              time.Duration
 	BotFillDelay              time.Duration
@@ -90,6 +104,20 @@ func LoadConfig() Config {
 		TickRate:                  envInt("TICK_RATE", 60),
 		SnapshotRate:              envInt("SNAPSHOT_RATE", 20),
 		MaxPlayers:                envInt("MAX_PLAYERS", 10),
+		WorldWidth:                envFloat("WORLD_WIDTH", defaultWorldWidth),
+		WorldHeight:               envFloat("WORLD_HEIGHT", defaultWorldHeight),
+		GravityAccel:              envFloat("GRAVITY_ACCEL", defaultGravityAccel),
+		Drag:                      envFloat("DRAG", defaultDrag),
+		TerminalSpeed:             envFloat("TERMINAL_SPEED", defaultTerminalSpeed),
+		PlayerRadiusScale:         envFloat("PLAYER_RADIUS_SCALE", defaultPlayerRadiusScale),
+		NumObjects:                envInt("NUM_OBJECTS", defaultNumObjects),
+		StartingMass:              envFloat("STARTING_MASS", defaultStartingMass),
+		StartingHealth:            envFloat("STARTING_HEALTH", defaultStartingHealth),
+		ProjectileSpeed:           envFloat("PROJECTILE_SPEED", defaultProjectileSpeed),
+		ProjectileDamage:          envFloat("PROJECTILE_DAMAGE", defaultProjectileDamage),
+		ProjectileRadius:          envFloat("PROJECTILE_RADIUS", defaultProjectileRadius),
+		ShootCooldown:             envDuration("SHOOT_COOLDOWN", defaultShootCooldown),
+		ProjectileTTL:             envDuration("PROJECTILE_TTL", defaultProjectileTTL),
 		MatchDuration:             envDuration("MATCH_DURATION", 5*time.Minute),
 		RespawnDelay:              envDuration("RESPAWN_DELAY", 2*time.Second),
 		BotFillDelay:              envDuration("BOT_FILL_DELAY", 5*time.Second),
@@ -312,7 +340,7 @@ func NewServer(cfg Config, logger *log.Logger) *Server {
 			MatchStart: now,
 			MatchEnds:  now.Add(cfg.MatchDuration),
 			Players:    make(map[string]*Player),
-			Objects:    make([]*Collectible, 0, numObjects),
+			Objects:    make([]*Collectible, 0, cfg.NumObjects),
 		},
 		rng:        mathrand.New(mathrand.NewSource(time.Now().UnixNano())),
 		httpClient: &http.Client{Timeout: 5 * time.Second},
@@ -578,7 +606,7 @@ func (s *Server) broadcastSnapshots(now time.Time) {
 	messageBase := snapshotMessage{
 		Type:            "snapshot",
 		ServerTime:      now.UnixMilli(),
-		World:           worldBounds{Width: worldWidth, Height: worldHeight},
+		World:           worldBounds{Width: s.cfg.WorldWidth, Height: s.cfg.WorldHeight},
 		MatchID:         s.lobby.MatchID,
 		MatchOver:       s.lobby.MatchOver,
 		TimeRemainingMs: maxInt64(s.lobby.MatchEnds.Sub(now).Milliseconds(), 0),
@@ -642,8 +670,8 @@ func (s *Server) updateBotsLocked(now time.Time) {
 
 		target, distance := s.closestTargetLocked(player, livePlayers)
 		if target == nil || now.After(player.BotRetargetAt) {
-			player.BotTargetX = s.randFloat(200, worldWidth-200)
-			player.BotTargetY = s.randFloat(200, worldHeight-200)
+			player.BotTargetX = s.randFloat(200, s.cfg.WorldWidth-200)
+			player.BotTargetY = s.randFloat(200, s.cfg.WorldHeight-200)
 			player.BotRetargetAt = now.Add(1800 * time.Millisecond)
 		}
 
@@ -680,15 +708,15 @@ func (s *Server) updatePlayersLocked(now time.Time) {
 		}
 
 		player.Angle = player.Input.Angle
-		accel := gravityAccel * clamp(player.Input.Strength, 0, 1) * dt
+		accel := s.cfg.GravityAccel * clamp(player.Input.Strength, 0, 1) * dt
 		player.VX += math.Cos(player.Input.Angle) * accel
 		player.VY += math.Sin(player.Input.Angle) * accel
-		player.VX *= drag
-		player.VY *= drag
+		player.VX *= s.cfg.Drag
+		player.VY *= s.cfg.Drag
 
 		speed := math.Hypot(player.VX, player.VY)
-		if speed > terminalSpeed {
-			scale := terminalSpeed / speed
+		if speed > s.cfg.TerminalSpeed {
+			scale := s.cfg.TerminalSpeed / speed
 			player.VX *= scale
 			player.VY *= scale
 		}
@@ -697,7 +725,7 @@ func (s *Server) updatePlayersLocked(now time.Time) {
 		player.Y += player.VY * dt
 		s.clampPlayerToWorldLocked(player)
 
-		if player.Input.Shoot && now.Sub(player.LastShotAt) >= shootCooldown {
+		if player.Input.Shoot && now.Sub(player.LastShotAt) >= s.cfg.ShootCooldown {
 			s.spawnProjectileLocked(player, now)
 			player.LastShotAt = now
 		}
@@ -715,7 +743,7 @@ func (s *Server) updateProjectilesLocked(now time.Time) {
 
 		projectile.X += projectile.VX * dt
 		projectile.Y += projectile.VY * dt
-		if projectile.X < 0 || projectile.X > worldWidth || projectile.Y < 0 || projectile.Y > worldHeight {
+		if projectile.X < 0 || projectile.X > s.cfg.WorldWidth || projectile.Y < 0 || projectile.Y > s.cfg.WorldHeight {
 			continue
 		}
 
@@ -733,7 +761,7 @@ func (s *Server) resolveObjectCollisionsLocked(now time.Time) {
 
 		speed := math.Hypot(player.VX, player.VY)
 		energy := 0.5 * player.Mass * speed * speed
-		playerRadius := radiusForMass(player.Mass)
+		playerRadius := s.radiusForMass(player.Mass)
 
 		for index := range s.lobby.Objects {
 			object := s.lobby.Objects[index]
@@ -745,7 +773,7 @@ func (s *Server) resolveObjectCollisionsLocked(now time.Time) {
 
 			if energy > object.Toughness {
 				player.Mass += object.Toughness / 50
-				player.Health = math.Min(startingHealth, player.Health+4)
+				player.Health = math.Min(s.cfg.StartingHealth, player.Health+4)
 				s.lobby.Objects[index] = s.spawnObjectLocked()
 			} else {
 				s.killPlayerLocked(player, nil, "crashed into a dense shard", now)
@@ -770,7 +798,7 @@ func (s *Server) resolvePlayerCollisionsLocked(now time.Time) {
 				continue
 			}
 
-			minDistance := radiusForMass(left.Mass) + radiusForMass(right.Mass)
+			minDistance := s.radiusForMass(left.Mass) + s.radiusForMass(right.Mass)
 			if math.Hypot(left.X-right.X, left.Y-right.Y) >= minDistance {
 				continue
 			}
@@ -788,7 +816,7 @@ func (s *Server) resolvePlayerCollisionsLocked(now time.Time) {
 			}
 
 			winner.Mass += loser.Mass * 0.35
-			winner.Health = math.Min(startingHealth, winner.Health+8)
+			winner.Health = math.Min(s.cfg.StartingHealth, winner.Health+8)
 			winner.Score++
 			winner.Kills++
 			s.killPlayerLocked(loser, winner, fmt.Sprintf("rammed by %s", winner.Name), now)
@@ -806,13 +834,13 @@ func (s *Server) resolveProjectileCollisionsLocked(now time.Time) {
 				continue
 			}
 
-			minDistance := radiusForMass(player.Mass) + projectile.Radius
+			minDistance := s.radiusForMass(player.Mass) + projectile.Radius
 			if math.Hypot(player.X-projectile.X, player.Y-projectile.Y) >= minDistance {
 				continue
 			}
 
 			player.Health -= projectile.Damage
-			player.Mass = math.Max(startingMass*0.55, player.Mass-projectile.Damage/25)
+			player.Mass = math.Max(s.cfg.StartingMass*0.55, player.Mass-projectile.Damage/25)
 			if player.Health <= 0 {
 				owner := s.lobby.Players[projectile.OwnerID]
 				if owner != nil {
@@ -842,8 +870,8 @@ func (s *Server) handleRespawnsLocked(now time.Time) {
 		}
 
 		player.Alive = true
-		player.Health = startingHealth
-		player.Mass = startingMass
+		player.Health = s.cfg.StartingHealth
+		player.Mass = s.cfg.StartingMass
 		player.VX = 0
 		player.VY = 0
 		player.KilledBy = ""
@@ -942,8 +970,8 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 			Name:  sanitizeName(name),
 			Color: s.randomColor(),
 		}
-		player.Health = startingHealth
-		player.Mass = startingMass
+		player.Health = s.cfg.StartingHealth
+		player.Mass = s.cfg.StartingMass
 		player.Alive = true
 		s.spawnPlayerAtRandomPositionLocked(player)
 		s.lobby.Players[player.ID] = player
@@ -954,11 +982,11 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 	player.Connection = connection
 	player.IsBot = false
 	player.Alive = true
-	if player.Mass < startingMass {
-		player.Mass = startingMass
+	if player.Mass < s.cfg.StartingMass {
+		player.Mass = s.cfg.StartingMass
 	}
 	if player.Health <= 0 {
-		player.Health = startingHealth
+		player.Health = s.cfg.StartingHealth
 	}
 	if player.X == 0 && player.Y == 0 {
 		s.spawnPlayerAtRandomPositionLocked(player)
@@ -966,7 +994,7 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 	player.RespawnAt = time.Time{}
 	player.DeathReason = ""
 	player.KilledBy = ""
-	player.LastShotAt = now.Add(-shootCooldown)
+	player.LastShotAt = now.Add(-s.cfg.ShootCooldown)
 
 	return player
 }
@@ -988,9 +1016,9 @@ func (s *Server) newBotLocked(now time.Time) *Player {
 		IsBot:      true,
 		Alive:      true,
 		Connected:  false,
-		Mass:       startingMass,
-		Health:     startingHealth,
-		LastShotAt: now.Add(-shootCooldown),
+		Mass:       s.cfg.StartingMass,
+		Health:     s.cfg.StartingHealth,
+		LastShotAt: now.Add(-s.cfg.ShootCooldown),
 	}
 	s.spawnPlayerAtRandomPositionLocked(bot)
 	return bot
@@ -998,7 +1026,7 @@ func (s *Server) newBotLocked(now time.Time) *Player {
 
 func (s *Server) spawnObjectsLocked() {
 	s.lobby.Objects = s.lobby.Objects[:0]
-	for i := 0; i < numObjects; i++ {
+	for i := 0; i < s.cfg.NumObjects; i++ {
 		s.lobby.Objects = append(s.lobby.Objects, s.spawnObjectLocked())
 	}
 }
@@ -1007,8 +1035,8 @@ func (s *Server) spawnObjectLocked() *Collectible {
 	radius := s.randFloat(5, 20)
 	return &Collectible{
 		ID:        randomID("obj"),
-		X:         s.randFloat(radius, worldWidth-radius),
-		Y:         s.randFloat(radius, worldHeight-radius),
+		X:         s.randFloat(radius, s.cfg.WorldWidth-radius),
+		Y:         s.randFloat(radius, s.cfg.WorldHeight-radius),
 		Radius:    radius,
 		Toughness: s.randFloat(50, 500),
 	}
@@ -1019,41 +1047,41 @@ func (s *Server) spawnProjectileLocked(player *Player, now time.Time) {
 		ID:        randomID("shot"),
 		OwnerID:   player.ID,
 		Color:     player.Color,
-		X:         player.X + math.Cos(player.Angle)*(radiusForMass(player.Mass)+10),
-		Y:         player.Y + math.Sin(player.Angle)*(radiusForMass(player.Mass)+10),
-		VX:        player.VX + math.Cos(player.Angle)*projectileSpeed,
-		VY:        player.VY + math.Sin(player.Angle)*projectileSpeed,
-		Radius:    projectileRadius,
-		Damage:    projectileDamage,
-		ExpiresAt: now.Add(projectileTTL),
+		X:         player.X + math.Cos(player.Angle)*(s.radiusForMass(player.Mass)+10),
+		Y:         player.Y + math.Sin(player.Angle)*(s.radiusForMass(player.Mass)+10),
+		VX:        player.VX + math.Cos(player.Angle)*s.cfg.ProjectileSpeed,
+		VY:        player.VY + math.Sin(player.Angle)*s.cfg.ProjectileSpeed,
+		Radius:    s.cfg.ProjectileRadius,
+		Damage:    s.cfg.ProjectileDamage,
+		ExpiresAt: now.Add(s.cfg.ProjectileTTL),
 	}
 	s.lobby.Projectiles = append(s.lobby.Projectiles, shot)
 }
 
 func (s *Server) clampPlayerToWorldLocked(player *Player) {
-	radius := radiusForMass(player.Mass)
+	radius := s.radiusForMass(player.Mass)
 	if player.X-radius < 0 {
 		player.X = radius
 		player.VX = 0
 	}
-	if player.X+radius > worldWidth {
-		player.X = worldWidth - radius
+	if player.X+radius > s.cfg.WorldWidth {
+		player.X = s.cfg.WorldWidth - radius
 		player.VX = 0
 	}
 	if player.Y-radius < 0 {
 		player.Y = radius
 		player.VY = 0
 	}
-	if player.Y+radius > worldHeight {
-		player.Y = worldHeight - radius
+	if player.Y+radius > s.cfg.WorldHeight {
+		player.Y = s.cfg.WorldHeight - radius
 		player.VY = 0
 	}
 }
 
 func (s *Server) spawnPlayerAtRandomPositionLocked(player *Player) {
-	radius := radiusForMass(math.Max(player.Mass, startingMass))
-	player.X = s.randFloat(radius+20, worldWidth-radius-20)
-	player.Y = s.randFloat(radius+20, worldHeight-radius-20)
+	radius := s.radiusForMass(math.Max(player.Mass, s.cfg.StartingMass))
+	player.X = s.randFloat(radius+20, s.cfg.WorldWidth-radius-20)
+	player.Y = s.randFloat(radius+20, s.cfg.WorldHeight-radius-20)
 }
 
 func (s *Server) killPlayerLocked(player *Player, killer *Player, reason string, now time.Time) {
@@ -1114,8 +1142,8 @@ func (s *Server) resetMatchLocked(now time.Time) {
 		}
 		player.Score = 0
 		player.Kills = 0
-		player.Mass = startingMass
-		player.Health = startingHealth
+		player.Mass = s.cfg.StartingMass
+		player.Health = s.cfg.StartingHealth
 		player.Alive = true
 		player.RespawnAt = time.Time{}
 		player.DeathReason = ""
@@ -1167,7 +1195,7 @@ func (s *Server) snapshotPlayersLocked(now time.Time) []snapshotPlayer {
 			VX:          player.VX,
 			VY:          player.VY,
 			Mass:        player.Mass,
-			Radius:      radiusForMass(player.Mass),
+			Radius:      s.radiusForMass(player.Mass),
 			Angle:       player.Angle,
 			Health:      player.Health,
 			IsAlive:     player.Alive,
@@ -1239,8 +1267,8 @@ func (connection *ClientConnection) writeJSON(payload any) error {
 	return connection.Socket.WriteJSON(payload)
 }
 
-func radiusForMass(mass float64) float64 {
-	return math.Sqrt(math.Max(mass, 1)) * playerRadiusScale
+func (s *Server) radiusForMass(mass float64) float64 {
+	return math.Sqrt(math.Max(mass, 1)) * s.cfg.PlayerRadiusScale
 }
 
 func randomID(prefix string) string {
@@ -1306,6 +1334,18 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envFloat(key string, fallback float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return fallback
 	}

@@ -3,12 +3,35 @@ kind: ConfigMap
 metadata:
   name: game-server-config
 data:
+  # Core runtime/network settings
   PORT: "8080"
   API_SERVER_URL: "http://api-server:8081"
   REDIS_ADDR: "redis:6379"
+
+  # Loop/capacity tuning
   TICK_RATE: "60"
-  SNAPSHOT_RATE: "20"
+  SNAPSHOT_RATE: "60"
   MAX_PLAYERS: "10"
+
+  # World + movement physics tuning
+  WORLD_WIDTH: "4000"
+  WORLD_HEIGHT: "4000"
+  GRAVITY_ACCEL: "2400"
+  DRAG: "0.98"
+  TERMINAL_SPEED: "900"
+  PLAYER_RADIUS_SCALE: "3"
+  NUM_OBJECTS: "200"
+  STARTING_MASS: "10"
+  STARTING_HEALTH: "100"
+
+  # Projectile combat tuning
+  PROJECTILE_SPEED: "1250"
+  PROJECTILE_DAMAGE: "28"
+  PROJECTILE_RADIUS: "5"
+  SHOOT_COOLDOWN: "250ms"
+  PROJECTILE_TTL: "1200ms"
+
+  # Match/lifecycle tuning
   MATCH_DURATION: "5m"
   RESPAWN_DELAY: "2s"
   BOT_FILL_DELAY: "5s"
