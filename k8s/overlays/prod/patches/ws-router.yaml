@@ -10,8 +10,8 @@ spec:
         - name: ws-router
           resources:
             requests:
-              cpu: 100m
-              memory: 64Mi
-            limits:
               cpu: 250m
               memory: 128Mi
+            limits:
+              cpu: 1m
+              memory: 256Mi

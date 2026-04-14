@@ -3,6 +3,21 @@ import type { MatchJoinResponse, ServerMessage, SnapshotMessage } from "./types"
 
 type SnapshotListener = (snapshot: SnapshotMessage) => void;
 const MAX_RECONNECT_ATTEMPTS = 10;
+const MAX_SNAPSHOT_BUFFER_SIZE = 20;
+
+function interpolationDelayMs() {
+  const raw = import.meta.env.VITE_INTERPOLATION_DELAY_MS;
+  if (!raw) {
+    return 100;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return 100;
+  }
+  return Math.min(Math.max(Math.round(parsed), 0), 250);
+}
+
+const INTERPOLATION_DELAY_MS = interpolationDelayMs();
 
 function getTokenExpiryMs(token: string): number | undefined {
   const [, payload] = token.split(".");
@@ -98,7 +113,7 @@ export class NetworkClient {
         if (!message.projectiles) message.projectiles = [];
         if (!message.objects) message.objects = [];
 
-        this.snapshotBuffer = [...this.snapshotBuffer.slice(-1), message];
+        this.snapshotBuffer = [...this.snapshotBuffer, message].slice(-MAX_SNAPSHOT_BUFFER_SIZE);
         useGameStore.getState().setSnapshotState({
           matchTimerMs: message.timeRemainingMs,
           killFeed: message.killFeed,
@@ -218,9 +233,31 @@ export class NetworkClient {
       return this.snapshotBuffer[0];
     }
 
-    const [previous, current] = this.snapshotBuffer;
+    const renderTime = Date.now() - INTERPOLATION_DELAY_MS;
+    const latest = this.snapshotBuffer[this.snapshotBuffer.length - 1];
+    if (renderTime >= latest.serverTime) {
+      return latest;
+    }
+
+    let previous = this.snapshotBuffer[0];
+    let current = latest;
+
+    for (let index = this.snapshotBuffer.length - 1; index > 0; index--) {
+      const candidateCurrent = this.snapshotBuffer[index];
+      const candidatePrevious = this.snapshotBuffer[index - 1];
+      if (candidatePrevious.serverTime <= renderTime && renderTime <= candidateCurrent.serverTime) {
+        previous = candidatePrevious;
+        current = candidateCurrent;
+        break;
+      }
+      if (renderTime < candidatePrevious.serverTime) {
+        previous = candidatePrevious;
+        current = candidateCurrent;
+      }
+    }
+
     const duration = Math.max(current.serverTime - previous.serverTime, 1);
-    const t = Math.min((Date.now() - current.serverTime) / duration + 1, 1);
+    const t = Math.min(Math.max((renderTime - previous.serverTime) / duration, 0), 1);
 
     return {
       ...current,
