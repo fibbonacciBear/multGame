@@ -1,11 +1,177 @@
 import type { SnapshotMessage, WorldObject, WorldPlayer } from "./types";
 
-const GRID_SPACING = 100;
 const BASE_HEALTH_BAR_WIDTH = 44;
 const BASELINE_MAX_HEALTH = 100;
+const STARFIELD_SEED = "game-space-v1";
+const AMBIENT_STAR_COLORS = ["#cde4ff", "#b3d4ff", "#adc8ff", "#ffe9c6", "#ffe0bc"];
+const HERO_STAR_COLORS = ["#dbeeff", "#cce5ff", "#d8ecff", "#ffdeb0", "#ffedd3"];
+
+type StarPoint = {
+  x: number;
+  y: number;
+  radius: number;
+  alpha: number;
+  color: string;
+};
+
+type ScreenStarfield = {
+  width: number;
+  height: number;
+  ambient: StarPoint[];
+  hero: StarPoint[];
+};
+
+let screenStarfieldCache: ScreenStarfield | undefined;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function hashSeed(seed: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function createSeededRng(seed: string): () => number {
+  let state = hashSeed(seed);
+  return () => {
+    state += 0x6d2b79f5;
+    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function randomInRange(random: () => number, min: number, max: number): number {
+  return min + random() * (max - min);
+}
+
+function buildScreenStarLayer(options: {
+  random: () => number;
+  width: number;
+  height: number;
+  count: number;
+  minRadius: number;
+  maxRadius: number;
+  minAlpha: number;
+  maxAlpha: number;
+  colors: string[];
+}): StarPoint[] {
+  const stars: StarPoint[] = [];
+  for (let index = 0; index < options.count; index += 1) {
+    stars.push({
+      x: randomInRange(options.random, 0, options.width),
+      y: randomInRange(options.random, 0, options.height),
+      radius: randomInRange(options.random, options.minRadius, options.maxRadius),
+      alpha: randomInRange(options.random, options.minAlpha, options.maxAlpha),
+      color:
+        options.colors[Math.floor(options.random() * options.colors.length)] ?? options.colors[0],
+    });
+  }
+  return stars;
+}
+
+function getScreenStarfield(width: number, height: number): ScreenStarfield {
+  const cached = screenStarfieldCache;
+  if (cached && cached.width === width && cached.height === height) {
+    return cached;
+  }
+
+  const random = createSeededRng(`${STARFIELD_SEED}:${width}x${height}`);
+  const area = width * height;
+  const ambientCount = Math.round(clamp(area / 9000, 120, 420));
+  const heroCount = Math.round(clamp(area / 42000, 24, 110));
+
+  const starfield: ScreenStarfield = {
+    width,
+    height,
+    ambient: buildScreenStarLayer({
+      random,
+      width,
+      height,
+      count: ambientCount,
+      minRadius: 0.5,
+      maxRadius: 1.35,
+      minAlpha: 0.4,
+      maxAlpha: 0.9,
+      colors: AMBIENT_STAR_COLORS,
+    }),
+    hero: buildScreenStarLayer({
+      random,
+      width,
+      height,
+      count: heroCount,
+      minRadius: 1.2,
+      maxRadius: 2.3,
+      minAlpha: 0.62,
+      maxAlpha: 0.98,
+      colors: HERO_STAR_COLORS,
+    }),
+  };
+
+  screenStarfieldCache = starfield;
+  return starfield;
+}
+
+function wrap(value: number, size: number): number {
+  if (size <= 0) {
+    return value;
+  }
+  return ((value % size) + size) % size;
+}
+
+function drawStarLayer(
+  ctx: CanvasRenderingContext2D,
+  stars: StarPoint[],
+  width: number,
+  height: number,
+  camX: number,
+  camY: number,
+  parallax: number,
+) {
+  for (const star of stars) {
+    const x = wrap(star.x - camX * parallax, width);
+    const y = wrap(star.y - camY * parallax, height);
+    ctx.beginPath();
+    ctx.arc(x, y, star.radius, 0, Math.PI * 2);
+    ctx.globalAlpha = star.alpha;
+    ctx.fillStyle = star.color;
+    ctx.fill();
+  }
+}
+
+function drawSpaceBackground(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  camX: number,
+  camY: number,
+) {
+  ctx.fillStyle = "#01040b";
+  ctx.fillRect(0, 0, width, height);
+
+  const glow = ctx.createRadialGradient(
+    width * 0.5,
+    height * 0.3,
+    0,
+    width * 0.5,
+    height * 0.3,
+    Math.max(width, height) * 0.95,
+  );
+  glow.addColorStop(0, "rgba(34, 71, 128, 0.2)");
+  glow.addColorStop(0.45, "rgba(16, 35, 75, 0.13)");
+  glow.addColorStop(1, "rgba(2, 5, 13, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, width, height);
+
+  const starfield = getScreenStarfield(width, height);
+  drawStarLayer(ctx, starfield.ambient, width, height, camX, camY, 0.006);
+  drawStarLayer(ctx, starfield.hero, width, height, camX, camY, 0.014);
+  ctx.globalAlpha = 1;
 }
 
 function objectMassColor(mass: number) {
@@ -13,36 +179,6 @@ function objectMassColor(mass: number) {
   const r = Math.round(72 + 160 * t);
   const g = Math.round(224 - 100 * t);
   return `rgb(${r},${g},50)`;
-}
-
-function drawGrid(
-  ctx: CanvasRenderingContext2D,
-  camX: number,
-  camY: number,
-  width: number,
-  height: number,
-) {
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
-  ctx.lineWidth = 1;
-
-  const startCol = Math.floor(camX / GRID_SPACING);
-  const endCol = Math.ceil((camX + width) / GRID_SPACING);
-  const startRow = Math.floor(camY / GRID_SPACING);
-  const endRow = Math.ceil((camY + height) / GRID_SPACING);
-
-  ctx.beginPath();
-  for (let col = startCol; col <= endCol; col += 1) {
-    const x = col * GRID_SPACING;
-    ctx.moveTo(x, camY);
-    ctx.lineTo(x, camY + height);
-  }
-
-  for (let row = startRow; row <= endRow; row += 1) {
-    const y = row * GRID_SPACING;
-    ctx.moveTo(camX, y);
-    ctx.lineTo(camX + width, y);
-  }
-  ctx.stroke();
 }
 
 function drawObjects(ctx: CanvasRenderingContext2D, objects: WorldObject[], camX: number, camY: number, width: number, height: number) {
@@ -124,13 +260,10 @@ export function renderWorld(
   const camY = selfPlayer.y - height / 2;
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#050914";
-  ctx.fillRect(0, 0, width, height);
+  drawSpaceBackground(ctx, width, height, camX, camY);
 
   ctx.save();
   ctx.translate(-camX, -camY);
-
-  drawGrid(ctx, camX, camY, width, height);
 
   ctx.strokeStyle = "rgba(255,80,80,0.35)";
   ctx.lineWidth = 2;
