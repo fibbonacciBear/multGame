@@ -748,6 +748,12 @@ select {
   border-radius: 0;
 }
 
+.app-shell-game {
+  --game-ui-green: #79f2a8;
+  --game-ui-green-soft: rgba(121, 242, 168, 0.78);
+  --game-ui-green-dim: rgba(121, 242, 168, 0.56);
+}
+
 .game-stage canvas {
   display: block;
   height: 100%;
@@ -803,6 +809,42 @@ select {
   display: block;
   font-size: 1.6rem;
   margin-top: 0.2rem;
+}
+
+.app-shell-game .hud-panel,
+.app-shell-game .kill-feed,
+.app-shell-game .live-leaderboard,
+.app-shell-game .notice-banner,
+.app-shell-game .death-overlay,
+.app-shell-game .scoreboard-overlay {
+  font-family: "VT323", "JetBrains Mono", "Courier New", monospace;
+  text-shadow: 0 0 10px rgba(121, 242, 168, 0.16);
+}
+
+.app-shell-game .hud-panel span,
+.app-shell-game .kill-feed li,
+.app-shell-game .live-leaderboard li,
+.app-shell-game .death-overlay .muted,
+.app-shell-game .notice-banner {
+  color: var(--game-ui-green-dim);
+}
+
+.app-shell-game .hud-panel strong,
+.app-shell-game .kill-feed > strong,
+.app-shell-game .kill-feed strong,
+.app-shell-game .live-leaderboard > strong,
+.app-shell-game .live-leaderboard strong,
+.app-shell-game .death-overlay h3,
+.app-shell-game .scoreboard-overlay h3,
+.app-shell-game .scoreboard-row strong {
+  color: var(--game-ui-green);
+}
+
+.app-shell-game .eyebrow,
+.app-shell-game .scoreboard-row span,
+.app-shell-game .live-leaderboard li span,
+.app-shell-game .kill-feed li {
+  color: var(--game-ui-green-soft);
 }
 
 .kill-feed {
