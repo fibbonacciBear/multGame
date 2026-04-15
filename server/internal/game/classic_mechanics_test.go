@@ -255,3 +255,75 @@ func TestRespawnUsesRetentionAndInvulnerability(t *testing.T) {
 		t.Fatalf("spawn invulnerability expiry = %v, want %v", player.SpawnInvulnerableUntil, now.Add(server.cfg.SpawnInvulnerabilityDuration))
 	}
 }
+
+func TestEvictDisconnectedPlayersLockedAfterGrace(t *testing.T) {
+	server := newClassicTestServer()
+	now := time.Now()
+
+	disconnected := &Player{
+		ID:             "player-disconnected",
+		Name:           "Ghost",
+		Connected:      false,
+		DisconnectedAt: now.Add(-11 * time.Second),
+		Alive:          true,
+		Mass:           server.cfg.StartingMass,
+		Health:         server.maxHealthForMass(server.cfg.StartingMass),
+	}
+	connected := &Player{
+		ID:        "player-connected",
+		Name:      "Live",
+		Connected: true,
+		Alive:     true,
+		Mass:      server.cfg.StartingMass,
+		Health:    server.maxHealthForMass(server.cfg.StartingMass),
+	}
+	server.lobby.Players[disconnected.ID] = disconnected
+	server.lobby.Players[connected.ID] = connected
+	server.lobby.Projectiles = []*Projectile{
+		{ID: "ghost-shot", OwnerID: disconnected.ID},
+		{ID: "live-shot", OwnerID: connected.ID},
+	}
+	server.lobby.CrashPairs = map[string]time.Time{
+		stablePairKey(disconnected.ID, connected.ID): now,
+	}
+
+	server.evictDisconnectedPlayersLocked(now)
+
+	if _, ok := server.lobby.Players[disconnected.ID]; ok {
+		t.Fatalf("expected disconnected player to be evicted")
+	}
+	if _, ok := server.lobby.Players[connected.ID]; !ok {
+		t.Fatalf("expected connected player to remain")
+	}
+	if got := len(server.lobby.Projectiles); got != 1 {
+		t.Fatalf("projectile count = %d, want 1", got)
+	}
+	if server.lobby.Projectiles[0].OwnerID != connected.ID {
+		t.Fatalf("remaining projectile owner = %q, want %q", server.lobby.Projectiles[0].OwnerID, connected.ID)
+	}
+	if got := len(server.lobby.CrashPairs); got != 0 {
+		t.Fatalf("crash pair count = %d, want 0", got)
+	}
+}
+
+func TestEvictDisconnectedPlayersLockedRespectsGrace(t *testing.T) {
+	server := newClassicTestServer()
+	now := time.Now()
+
+	player := &Player{
+		ID:             "player-disconnected",
+		Name:           "Ghost",
+		Connected:      false,
+		DisconnectedAt: now.Add(-9 * time.Second),
+		Alive:          true,
+		Mass:           server.cfg.StartingMass,
+		Health:         server.maxHealthForMass(server.cfg.StartingMass),
+	}
+	server.lobby.Players[player.ID] = player
+
+	server.evictDisconnectedPlayersLocked(now)
+
+	if _, ok := server.lobby.Players[player.ID]; !ok {
+		t.Fatalf("expected disconnected player to remain within grace period")
+	}
+}
