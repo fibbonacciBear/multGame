@@ -58,6 +58,7 @@ const (
 	defaultSpawnAttempts     = 20
 	defaultPassiveHealPerSec = 2.5
 	defaultPassiveHealDelay  = 1500 * time.Millisecond
+	defaultDisconnectGrace   = 10 * time.Second
 )
 
 var palette = []string{
@@ -116,6 +117,7 @@ type Config struct {
 	BotDifficultyDistribution    string
 	MatchDuration                time.Duration
 	RespawnDelay                 time.Duration
+	DisconnectGracePeriod        time.Duration
 	BotFillDelay                 time.Duration
 	RegistryHeartbeatInterval    time.Duration
 	RegistryHeartbeatTTL         time.Duration
@@ -186,6 +188,7 @@ func LoadConfig() Config {
 		BotDifficultyDistribution:    envOrDefault("BOT_DIFFICULTY_DISTRIBUTION", "L0:10,L1:30,L2:40,L3:20"),
 		MatchDuration:                envDuration("MATCH_DURATION", 5*time.Minute),
 		RespawnDelay:                 envDuration("RESPAWN_DELAY", 2*time.Second),
+		DisconnectGracePeriod:        envDuration("DISCONNECT_GRACE_PERIOD", defaultDisconnectGrace),
 		BotFillDelay:                 envDuration("BOT_FILL_DELAY", 5*time.Second),
 		RegistryHeartbeatInterval:    envDuration("REGISTRY_HEARTBEAT_INTERVAL", 5*time.Second),
 		RegistryHeartbeatTTL:         registryHeartbeatTTL(),
@@ -232,6 +235,7 @@ type Player struct {
 	IsBot                  bool
 	Connected              bool
 	Connection             *ClientConnection
+	DisconnectedAt         time.Time
 	X                      float64
 	Y                      float64
 	VX                     float64
@@ -602,6 +606,8 @@ func (s *Server) readLoop(connection *ClientConnection) {
 			if player.Connection == connection {
 				player.Connected = false
 				player.Connection = nil
+				player.DisconnectedAt = time.Now()
+				player.Input = InputState{}
 			}
 		}
 		s.mu.Unlock()
@@ -641,6 +647,7 @@ func (s *Server) step(now time.Time) {
 	if s.draining && s.lobby.MatchOver {
 		return
 	}
+	s.evictDisconnectedPlayersLocked(now)
 
 	if !s.lobby.MatchOver {
 		s.fillBotsLocked(now)
@@ -889,6 +896,7 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 	player.Name = sanitizeName(name)
 	player.Connected = true
 	player.Connection = connection
+	player.DisconnectedAt = time.Time{}
 	player.IsBot = false
 	player.Alive = true
 	if player.Mass < s.cfg.StartingMass {
@@ -1192,6 +1200,52 @@ func signPayload(payload []byte, secret string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+func (s *Server) evictDisconnectedPlayersLocked(now time.Time) {
+	grace := s.cfg.DisconnectGracePeriod
+
+	evicted := make(map[string]struct{})
+	for id, player := range s.lobby.Players {
+		if player.IsBot || player.Connected {
+			continue
+		}
+		if player.DisconnectedAt.IsZero() {
+			player.DisconnectedAt = now
+		}
+		if now.Sub(player.DisconnectedAt) < grace {
+			continue
+		}
+		evicted[id] = struct{}{}
+		delete(s.lobby.Players, id)
+	}
+
+	if len(evicted) == 0 {
+		return
+	}
+
+	filteredProjectiles := s.lobby.Projectiles[:0]
+	for _, projectile := range s.lobby.Projectiles {
+		if _, removed := evicted[projectile.OwnerID]; removed {
+			continue
+		}
+		filteredProjectiles = append(filteredProjectiles, projectile)
+	}
+	s.lobby.Projectiles = filteredProjectiles
+
+	for key := range s.lobby.CrashPairs {
+		ids := strings.SplitN(key, "|", 2)
+		if len(ids) != 2 {
+			continue
+		}
+		if _, removed := evicted[ids[0]]; removed {
+			delete(s.lobby.CrashPairs, key)
+			continue
+		}
+		if _, removed := evicted[ids[1]]; removed {
+			delete(s.lobby.CrashPairs, key)
+		}
+	}
+}
+
 func normalizeConfig(cfg Config) Config {
 	if cfg.StartingMass <= 0 {
 		cfg.StartingMass = defaultStartingMass
@@ -1261,6 +1315,9 @@ func normalizeConfig(cfg Config) Config {
 	}
 	if cfg.BotDifficultyDistribution == "" {
 		cfg.BotDifficultyDistribution = "L0:10,L1:30,L2:40,L3:20"
+	}
+	if cfg.DisconnectGracePeriod <= 0 {
+		cfg.DisconnectGracePeriod = defaultDisconnectGrace
 	}
 
 	return cfg
