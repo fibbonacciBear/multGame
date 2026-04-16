@@ -10,7 +10,7 @@ data:
 
   # Loop/capacity tuning
   TICK_RATE: "60"
-  SNAPSHOT_RATE: "60"
+  SNAPSHOT_RATE: "30"
   MAX_PLAYERS: "10"
 
 
