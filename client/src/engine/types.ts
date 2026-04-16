@@ -40,7 +40,7 @@ export type Projectile = {
   vy: number;
   radius: number;
   ownerId: string;
-  type: "railgun" | string;
+  type: "railgun" | (string & {});
   color: string;
 };
 
