@@ -192,7 +192,7 @@ func LoadConfig() Config {
 		RespawnDelay:                 envDuration("RESPAWN_DELAY", 2*time.Second),
 		IntermissionDuration:         envDuration("INTERMISSION_DURATION", defaultIntermission),
 		DisconnectGracePeriod:        envDuration("DISCONNECT_GRACE_PERIOD", defaultDisconnectGrace),
-		BotFillDelay:                 envDuration("BOT_FILL_DELAY", 5*time.Second),
+		BotFillDelay:                 envDuration("BOT_FILL_DELAY", 0),
 		RegistryHeartbeatInterval:    envDuration("REGISTRY_HEARTBEAT_INTERVAL", 5*time.Second),
 		RegistryHeartbeatTTL:         registryHeartbeatTTL(),
 		LobbyTTL:                     envDuration("LOBBY_TTL", 330*time.Second),

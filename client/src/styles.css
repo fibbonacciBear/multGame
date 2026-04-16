@@ -921,6 +921,227 @@ select {
   bottom: 1rem;
 }
 
+.intermission-overlay {
+  background:
+    linear-gradient(180deg, rgba(4, 12, 26, 0.92) 0%, rgba(2, 8, 20, 0.96) 100%),
+    radial-gradient(circle at 18% 10%, rgba(104, 225, 253, 0.1), transparent 30%);
+  border: 1px solid rgba(104, 225, 253, 0.22);
+  border-radius: 18px;
+  inset: 1rem;
+  overflow: auto;
+  padding: 1.4rem;
+  transform: none;
+  width: auto;
+  display: grid;
+  gap: 1rem;
+}
+
+.intermission-header {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.intermission-brand {
+  color: var(--game-ui-green);
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  margin: 0;
+  text-align: center;
+  text-transform: lowercase;
+}
+
+.intermission-status-card {
+  align-items: center;
+  border: 1px solid rgba(124, 178, 255, 0.25);
+  border-radius: 14px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.9rem 1rem;
+}
+
+.intermission-status-copy {
+  color: var(--game-ui-green-soft);
+  letter-spacing: 0.12em;
+  margin: 0.2rem 0 0;
+  text-transform: lowercase;
+}
+
+.intermission-countdown {
+  color: var(--game-ui-green);
+  font-size: clamp(2rem, 4vw, 2.7rem);
+  letter-spacing: 0.11em;
+  margin: 0.1rem 0 0;
+}
+
+.intermission-status-meta {
+  text-align: right;
+}
+
+.intermission-status-meta strong {
+  color: var(--game-ui-green-soft);
+  display: block;
+  font-size: 1.35rem;
+  margin-top: 0.3rem;
+}
+
+.intermission-mode-section {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.intermission-mode-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.intermission-mode-button {
+  align-items: flex-start;
+  background: rgba(10, 20, 38, 0.78);
+  border: 1px solid rgba(124, 178, 255, 0.22);
+  border-radius: 12px;
+  color: var(--game-ui-green-soft);
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.8rem 0.9rem;
+  text-align: left;
+}
+
+.intermission-mode-button:hover:not(:disabled):not(.selected) {
+  background: rgba(17, 32, 56, 0.85);
+  transform: none;
+}
+
+.intermission-mode-button.selected {
+  border-color: rgba(121, 242, 168, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(121, 242, 168, 0.15);
+}
+
+.intermission-mode-button:disabled {
+  background: rgba(9, 16, 31, 0.75);
+  border-color: rgba(124, 178, 255, 0.14);
+  color: rgba(168, 187, 219, 0.42);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.intermission-mode-button.selected:disabled {
+  background: rgba(10, 20, 38, 0.82);
+  border-color: rgba(121, 242, 168, 0.45);
+  color: var(--game-ui-green-soft);
+  cursor: default;
+}
+
+.intermission-mode-header {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.intermission-mode-header strong {
+  font-size: 1.6rem;
+  font-weight: 500;
+}
+
+.intermission-mode-header span {
+  color: var(--game-ui-green-soft);
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.intermission-mode-button > span {
+  color: inherit;
+  font-size: 1rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.intermission-leaderboard-section {
+  border-top: 1px solid rgba(124, 178, 255, 0.2);
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.7rem;
+}
+
+.intermission-leaderboard-title {
+  color: var(--game-ui-green);
+  font-size: 1.35rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.intermission-leaderboard-header {
+  color: var(--game-ui-green-dim);
+  display: grid;
+  font-size: 0.95rem;
+  gap: 0.9rem;
+  grid-template-columns: 56px minmax(0, 1.4fr) minmax(90px, auto) minmax(70px, auto) minmax(90px, auto);
+  letter-spacing: 0.16em;
+  padding: 0.3rem 0.8rem 0.25rem;
+  text-transform: uppercase;
+}
+
+.intermission-scoreboard-row {
+  background: rgba(11, 20, 36, 0.88);
+  border: 1px solid rgba(124, 178, 255, 0.17);
+  border-radius: 10px;
+  grid-template-columns: 56px minmax(0, 1.4fr) minmax(90px, auto) minmax(70px, auto) minmax(90px, auto);
+}
+
+.intermission-scoreboard-row strong {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intermission-you-badge {
+  border: 1px solid rgba(124, 178, 255, 0.32);
+  border-radius: 999px;
+  color: var(--game-ui-green-soft);
+  font-size: 0.75rem;
+  font-style: normal;
+  letter-spacing: 0.09em;
+  padding: 0.12rem 0.38rem;
+  text-transform: uppercase;
+}
+
+.intermission-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.1rem;
+}
+
+.intermission-actions button {
+  background: rgba(9, 15, 30, 0.74);
+  border: 1px solid rgba(124, 178, 255, 0.34);
+  color: var(--game-ui-green-soft);
+  letter-spacing: 0.16em;
+  min-width: 210px;
+  text-transform: uppercase;
+}
+
+.intermission-actions button:hover:not(:disabled) {
+  background: rgba(16, 27, 49, 0.88);
+}
+
+.intermission-meta {
+  color: var(--game-ui-green-dim);
+  display: flex;
+  font-size: 0.95rem;
+  justify-content: space-between;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .death-overlay h3,
 .scoreboard-overlay h3 {
   margin-bottom: 0.35rem;
@@ -1010,6 +1231,47 @@ select {
   .death-overlay,
   .scoreboard-overlay {
     bottom: 11rem;
+  }
+
+  .intermission-overlay {
+    bottom: 0.75rem;
+    inset: 0.75rem;
+    padding: 0.95rem;
+  }
+
+  .intermission-status-card {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .intermission-status-meta {
+    text-align: left;
+  }
+
+  .intermission-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .intermission-leaderboard-header,
+  .intermission-scoreboard-row {
+    gap: 0.45rem;
+    grid-template-columns: 36px minmax(0, 1fr) 72px;
+    padding-left: 0.55rem;
+    padding-right: 0.55rem;
+  }
+
+  .intermission-leaderboard-header span:nth-child(4),
+  .intermission-leaderboard-header span:nth-child(5),
+  .intermission-scoreboard-row span:nth-child(4),
+  .intermission-scoreboard-row span:nth-child(5) {
+    display: none;
+  }
+
+  .intermission-meta {
+    flex-direction: column;
+    gap: 0.35rem;
+    text-align: center;
   }
 
   .minimap-card {

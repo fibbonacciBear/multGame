@@ -41,9 +41,15 @@ describe("Scoreboard", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Next match in 10s")).toBeTruthy();
+    expect(screen.getByText("00:10")).toBeTruthy();
+    const nebulaMode = screen.getByRole("button", { name: "Nebula mode" }) as HTMLButtonElement;
+    const pulsarMode = screen.getByRole("button", { name: "Pulsar mode" }) as HTMLButtonElement;
+    const quasarMode = screen.getByRole("button", { name: "Quasar mode" }) as HTMLButtonElement;
+    expect(nebulaMode.disabled).toBe(true);
+    expect(pulsarMode.disabled).toBe(true);
+    expect(quasarMode.disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Leave Match" }));
+    fireEvent.click(screen.getByRole("button", { name: "Leave Lobby" }));
 
     expect(navigateMock).toHaveBeenCalledWith("/");
   });
