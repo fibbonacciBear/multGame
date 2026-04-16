@@ -59,6 +59,7 @@ const (
 	defaultPassiveHealPerSec = 2.5
 	defaultPassiveHealDelay  = 1500 * time.Millisecond
 	defaultDisconnectGrace   = 10 * time.Second
+	defaultIntermission      = 10 * time.Second
 )
 
 var palette = []string{
@@ -117,6 +118,7 @@ type Config struct {
 	BotDifficultyDistribution    string
 	MatchDuration                time.Duration
 	RespawnDelay                 time.Duration
+	IntermissionDuration         time.Duration
 	DisconnectGracePeriod        time.Duration
 	BotFillDelay                 time.Duration
 	RegistryHeartbeatInterval    time.Duration
@@ -188,6 +190,7 @@ func LoadConfig() Config {
 		BotDifficultyDistribution:    envOrDefault("BOT_DIFFICULTY_DISTRIBUTION", "L0:10,L1:30,L2:40,L3:20"),
 		MatchDuration:                envDuration("MATCH_DURATION", 5*time.Minute),
 		RespawnDelay:                 envDuration("RESPAWN_DELAY", 2*time.Second),
+		IntermissionDuration:         envDuration("INTERMISSION_DURATION", defaultIntermission),
 		DisconnectGracePeriod:        envDuration("DISCONNECT_GRACE_PERIOD", defaultDisconnectGrace),
 		BotFillDelay:                 envDuration("BOT_FILL_DELAY", 5*time.Second),
 		RegistryHeartbeatInterval:    envDuration("REGISTRY_HEARTBEAT_INTERVAL", 5*time.Second),
@@ -214,12 +217,22 @@ type Server struct {
 	lastTickAt atomic.Int64
 }
 
+type LobbyPhase string
+
+const (
+	phaseIdle         LobbyPhase = "idle"
+	phaseActive       LobbyPhase = "active"
+	phaseIntermission LobbyPhase = "intermission"
+)
+
 type Lobby struct {
-	ID         string
-	MatchID    string
-	MatchStart time.Time
-	MatchEnds  time.Time
-	MatchOver  bool
+	ID               string
+	MatchID          string
+	Phase            LobbyPhase
+	MatchStart       time.Time
+	MatchEnds        time.Time
+	IntermissionEnds time.Time
+	MatchOver        bool
 
 	Players     map[string]*Player
 	CrashPairs  map[string]time.Time
@@ -327,6 +340,7 @@ type snapshotMessage struct {
 	MatchID         string             `json:"matchId"`
 	MatchOver       bool               `json:"matchOver"`
 	TimeRemainingMs int64              `json:"timeRemainingMs"`
+	IntermissionMs  int64              `json:"intermissionRemainingMs"`
 	Players         []snapshotPlayer   `json:"players"`
 	Objects         []*Collectible     `json:"objects"`
 	Projectiles     []snapshotShot     `json:"projectiles"`
@@ -417,8 +431,8 @@ func NewServer(cfg Config, logger *log.Logger) *Server {
 		lobby: &Lobby{
 			ID:         cfg.LobbyID,
 			MatchID:    randomID("match"),
-			MatchStart: now,
-			MatchEnds:  now.Add(cfg.MatchDuration),
+			Phase:      phaseIdle,
+			MatchOver:  true,
 			Players:    make(map[string]*Player),
 			CrashPairs: make(map[string]time.Time),
 			Objects:    make([]*Collectible, 0, cfg.NumObjects),
@@ -432,12 +446,6 @@ func NewServer(cfg Config, logger *log.Logger) *Server {
 }
 
 func (s *Server) Start(ctx context.Context) {
-	s.mu.Lock()
-	if len(s.lobby.Objects) == 0 {
-		s.spawnObjectsLocked()
-	}
-	s.mu.Unlock()
-
 	go s.startRegistryLoop(ctx)
 	go s.loop(ctx)
 }
@@ -473,7 +481,7 @@ func (s *Server) HandleReadyz(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.draining || s.activeSlotsLocked() >= s.cfg.MaxPlayers {
+	if s.draining || s.connectedHumansLocked() >= s.cfg.MaxPlayers {
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -518,6 +526,19 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.mu.Lock()
+	if s.draining {
+		s.mu.Unlock()
+		http.Error(w, "server draining", http.StatusServiceUnavailable)
+		return
+	}
+	if !s.canAdmitHumanLocked(claims.Subject) {
+		s.mu.Unlock()
+		http.Error(w, "lobby full", http.StatusServiceUnavailable)
+		return
+	}
+	s.mu.Unlock()
+
 	socket, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.logger.Printf("websocket upgrade failed: %v", err)
@@ -528,15 +549,25 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 		PlayerID: claims.Subject,
 		Socket:   socket,
 	}
-	WSConnectionsOpened.Inc()
 
 	s.mu.Lock()
 	now := time.Now()
-	if s.lobby.MatchOver {
+	if s.draining {
+		s.mu.Unlock()
+		s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "server draining")
+		return
+	}
+	if !s.canAdmitHumanLocked(claims.Subject) {
+		s.mu.Unlock()
+		s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "lobby full")
+		return
+	}
+	if s.lobby.Phase == phaseIdle {
 		s.resetMatchLocked(now)
 	}
 	player := s.upsertHumanPlayerLocked(claims.Subject, claims.PlayerName, connection, now)
 	s.mu.Unlock()
+	WSConnectionsOpened.Inc()
 
 	_ = connection.writeJSON(welcomeMessage{
 		Type:     "welcome",
@@ -555,6 +586,12 @@ func (s *Server) BeginDrain(message string) {
 		return
 	}
 	s.draining = true
+	if s.lobby.Phase == phaseIntermission {
+		s.lobby.IntermissionEnds = time.Time{}
+	}
+	if s.connectedHumansLocked() == 0 {
+		s.markDrainCompleteLocked()
+	}
 	connections := s.currentConnectionsLocked()
 	s.mu.Unlock()
 
@@ -644,12 +681,20 @@ func (s *Server) step(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.draining && s.lobby.MatchOver {
+	s.evictDisconnectedPlayersLocked(now)
+	if s.draining && s.connectedHumansLocked() == 0 {
+		s.markDrainCompleteLocked()
+		s.updateGauges()
 		return
 	}
-	s.evictDisconnectedPlayersLocked(now)
+	if !s.draining && s.connectedHumansLocked() == 0 && (s.lobby.Phase == phaseActive || s.lobby.Phase == phaseIntermission) {
+		s.transitionToIdleLocked()
+		s.updateGauges()
+		return
+	}
 
-	if !s.lobby.MatchOver {
+	switch s.lobby.Phase {
+	case phaseActive:
 		s.fillBotsLocked(now)
 		s.updateBotsLocked(now)
 		s.updatePlayersLocked(now)
@@ -659,12 +704,18 @@ func (s *Server) step(now time.Time) {
 		s.resolveCombatLocked(now)
 		s.applyPassiveHealingLocked(now)
 		if now.After(s.lobby.MatchEnds) {
-			s.finishMatchLocked()
-			go s.reportLeaderboard(s.scoreboardLocked())
+			scoreboard := s.scoreboardLocked()
+			s.finishMatchLocked(now)
+			go s.reportLeaderboard(scoreboard)
+			if s.draining {
+				s.lobby.IntermissionEnds = time.Time{}
+			}
 		}
 		s.handleRespawnsLocked(now)
-	} else if !s.draining && !s.hasConnectedHumansLocked() {
-		s.resetMatchLocked(now)
+	case phaseIntermission:
+		if !s.draining && !s.lobby.IntermissionEnds.IsZero() && !now.Before(s.lobby.IntermissionEnds) {
+			s.resetMatchLocked(now)
+		}
 	}
 
 	s.updateGauges()
@@ -697,7 +748,8 @@ func (s *Server) broadcastSnapshots(now time.Time) {
 		World:           worldBounds{Width: s.cfg.WorldWidth, Height: s.cfg.WorldHeight},
 		MatchID:         s.lobby.MatchID,
 		MatchOver:       s.lobby.MatchOver,
-		TimeRemainingMs: maxInt64(s.lobby.MatchEnds.Sub(now).Milliseconds(), 0),
+		TimeRemainingMs: s.matchTimeRemainingLocked(now),
+		IntermissionMs:  s.intermissionRemainingLocked(now),
 		Players:         s.snapshotPlayersLocked(now),
 		Objects:         append([]*Collectible(nil), s.lobby.Objects...),
 		Projectiles:     s.snapshotProjectilesLocked(),
@@ -797,8 +849,10 @@ func (s *Server) updateProjectilesLocked(now time.Time) {
 	s.lobby.Projectiles = projectiles
 }
 
-func (s *Server) finishMatchLocked() {
+func (s *Server) finishMatchLocked(now time.Time) {
+	s.lobby.Phase = phaseIntermission
 	s.lobby.MatchOver = true
+	s.lobby.IntermissionEnds = now.Add(s.cfg.IntermissionDuration)
 	MatchesCompleted.Inc()
 }
 
@@ -857,12 +911,17 @@ func (s *Server) currentConnectionsLocked() []*ClientConnection {
 }
 
 func (s *Server) hasConnectedHumansLocked() bool {
+	return s.connectedHumansLocked() > 0
+}
+
+func (s *Server) connectedHumansLocked() int {
+	humans := 0
 	for _, player := range s.lobby.Players {
 		if !player.IsBot && player.Connected {
-			return true
+			humans++
 		}
 	}
-	return false
+	return humans
 }
 
 func (s *Server) activeSlotsLocked() int {
@@ -873,6 +932,20 @@ func (s *Server) activeSlotsLocked() int {
 		}
 	}
 	return total
+}
+
+func (s *Server) canAdmitHumanLocked(id string) bool {
+	player, ok := s.lobby.Players[id]
+	if ok && !player.IsBot {
+		return true
+	}
+	return s.connectedHumansLocked() < s.cfg.MaxPlayers
+}
+
+func (s *Server) closeSocketWithReason(socket *websocket.Conn, code int, reason string) {
+	deadline := time.Now().Add(250 * time.Millisecond)
+	_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), deadline)
+	_ = socket.Close()
 }
 
 func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConnection, now time.Time) *Player {
@@ -925,6 +998,34 @@ func (s *Server) removeOneBotLocked() {
 			return
 		}
 	}
+}
+
+func (s *Server) transitionToIdleLocked() {
+	s.lobby.Phase = phaseIdle
+	s.lobby.MatchOver = true
+	s.lobby.MatchStart = time.Time{}
+	s.lobby.MatchEnds = time.Time{}
+	s.lobby.IntermissionEnds = time.Time{}
+	s.lobby.Projectiles = nil
+	s.lobby.CrashPairs = make(map[string]time.Time)
+	s.lobby.KillFeed = s.lobby.KillFeed[:0]
+	s.lobby.Objects = s.lobby.Objects[:0]
+
+	for id, player := range s.lobby.Players {
+		if player.IsBot || !player.Connected {
+			delete(s.lobby.Players, id)
+		}
+	}
+}
+
+func (s *Server) markDrainCompleteLocked() {
+	if s.connectedHumansLocked() == 0 {
+		s.lobby.Phase = phaseIdle
+	} else {
+		s.lobby.Phase = phaseIntermission
+	}
+	s.lobby.MatchOver = true
+	s.lobby.IntermissionEnds = time.Time{}
 }
 
 func (s *Server) spawnObjectsLocked() {
@@ -1005,8 +1106,10 @@ func (s *Server) killPlayerLocked(player *Player, killer *Player, reason string,
 
 func (s *Server) resetMatchLocked(now time.Time) {
 	s.lobby.MatchID = randomID("match")
+	s.lobby.Phase = phaseActive
 	s.lobby.MatchStart = now
 	s.lobby.MatchEnds = now.Add(s.cfg.MatchDuration)
+	s.lobby.IntermissionEnds = time.Time{}
 	s.lobby.MatchOver = false
 	s.lobby.Projectiles = nil
 	s.lobby.CrashPairs = make(map[string]time.Time)
@@ -1014,7 +1117,7 @@ func (s *Server) resetMatchLocked(now time.Time) {
 	s.spawnObjectsLocked()
 
 	for id, player := range s.lobby.Players {
-		if player.IsBot {
+		if player.IsBot || !player.Connected {
 			delete(s.lobby.Players, id)
 			continue
 		}
@@ -1123,6 +1226,20 @@ func (s *Server) buildSelfState(player *Player, now time.Time) *selfState {
 		DeathReason: player.DeathReason,
 		KilledBy:    player.KilledBy,
 	}
+}
+
+func (s *Server) matchTimeRemainingLocked(now time.Time) int64 {
+	if s.lobby.Phase != phaseActive || s.lobby.MatchEnds.IsZero() {
+		return 0
+	}
+	return maxInt64(s.lobby.MatchEnds.Sub(now).Milliseconds(), 0)
+}
+
+func (s *Server) intermissionRemainingLocked(now time.Time) int64 {
+	if s.lobby.Phase != phaseIntermission || s.lobby.IntermissionEnds.IsZero() || !now.Before(s.lobby.IntermissionEnds) {
+		return 0
+	}
+	return s.lobby.IntermissionEnds.Sub(now).Milliseconds()
 }
 
 func (s *Server) parseToken(tokenString, expectedLobby string) (*matchClaims, error) {
@@ -1315,6 +1432,9 @@ func normalizeConfig(cfg Config) Config {
 	}
 	if cfg.BotDifficultyDistribution == "" {
 		cfg.BotDifficultyDistribution = "L0:10,L1:30,L2:40,L3:20"
+	}
+	if cfg.IntermissionDuration <= 0 {
+		cfg.IntermissionDuration = defaultIntermission
 	}
 	if cfg.DisconnectGracePeriod <= 0 {
 		cfg.DisconnectGracePeriod = defaultDisconnectGrace

@@ -125,7 +125,7 @@ func (s *Server) currentRegistryRecord() (registryRecord, error) {
 	state := registryStateReady
 	if s.draining {
 		state = registryStateDraining
-	} else if s.activeSlotsLocked() >= s.cfg.MaxPlayers {
+	} else if s.connectedHumansLocked() >= s.cfg.MaxPlayers {
 		state = registryStateFull
 	}
 

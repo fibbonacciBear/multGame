@@ -50,6 +50,7 @@ const snapshot: SnapshotMessage = {
   matchId: "match-1",
   matchOver: false,
   timeRemainingMs: 1000,
+  intermissionRemainingMs: 0,
   players: [
     {
       id: "self",

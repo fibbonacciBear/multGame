@@ -119,6 +119,7 @@ export class NetworkClient {
           killFeed: message.killFeed,
           self: message.you,
           matchOver: message.matchOver,
+          intermissionRemainingMs: message.intermissionRemainingMs ?? 0,
           scoreboard: message.scoreboard,
           serverNotice: message.serverNotice,
         });

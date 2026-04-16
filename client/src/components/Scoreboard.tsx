@@ -4,11 +4,14 @@ import { useGameStore } from "../store/gameStore";
 export default function Scoreboard() {
   const navigate = useNavigate();
   const matchOver = useGameStore((state) => state.matchOver);
+  const intermissionRemainingMs = useGameStore((state) => state.intermissionRemainingMs);
   const rows = useGameStore((state) => state.scoreboard);
 
   if (!matchOver) {
     return null;
   }
+
+  const countdownSeconds = Math.max(Math.ceil(intermissionRemainingMs / 1000), 0);
 
   return (
     <section className="scoreboard-overlay">
@@ -16,9 +19,10 @@ export default function Scoreboard() {
         <div>
           <p className="eyebrow">Match Complete</p>
           <h3>Final standings</h3>
+          {countdownSeconds > 0 ? <p>Next match in {countdownSeconds}s</p> : null}
         </div>
         <button type="button" onClick={() => navigate("/")}>
-          Play Again
+          Leave Match
         </button>
       </div>
       <div className="scoreboard-list">

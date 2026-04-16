@@ -51,6 +51,7 @@ export type SnapshotMessage = {
   matchId: string;
   matchOver: boolean;
   timeRemainingMs: number;
+  intermissionRemainingMs: number;
   players: WorldPlayer[];
   objects: WorldObject[];
   projectiles: Projectile[];

@@ -47,6 +47,7 @@ type GameStore = {
   killFeed: KillFeedEntry[];
   self?: SelfState;
   matchOver: boolean;
+  intermissionRemainingMs: number;
   scoreboard: ScoreboardEntry[];
   leaderboardPreview: LeaderboardEntry[];
   serverNotice?: string;
@@ -59,6 +60,7 @@ type GameStore = {
     killFeed: KillFeedEntry[];
     self?: SelfState;
     matchOver: boolean;
+    intermissionRemainingMs: number;
     scoreboard: ScoreboardEntry[];
     serverNotice?: string;
   }) => void;
@@ -74,6 +76,7 @@ const initialUiState = {
   killFeed: [],
   self: undefined,
   matchOver: false,
+  intermissionRemainingMs: 0,
   scoreboard: [],
   serverNotice: undefined,
 };
@@ -87,12 +90,21 @@ export const useGameStore = create<GameStore>((set) => ({
   setConnectionStatus: (connectionStatus, connectionError) =>
     set({ connectionStatus, connectionError }),
   setServerNotice: (serverNotice) => set({ serverNotice }),
-  setSnapshotState: ({ matchTimerMs, killFeed, self, matchOver, scoreboard, serverNotice }) =>
+  setSnapshotState: ({
+    matchTimerMs,
+    killFeed,
+    self,
+    matchOver,
+    intermissionRemainingMs,
+    scoreboard,
+    serverNotice,
+  }) =>
     set({
       matchTimerMs,
       killFeed,
       self,
       matchOver,
+      intermissionRemainingMs,
       scoreboard,
       serverNotice,
     }),
