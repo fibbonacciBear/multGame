@@ -910,10 +910,6 @@ func (s *Server) currentConnectionsLocked() []*ClientConnection {
 	return connections
 }
 
-func (s *Server) hasConnectedHumansLocked() bool {
-	return s.connectedHumansLocked() > 0
-}
-
 func (s *Server) connectedHumansLocked() int {
 	humans := 0
 	for _, player := range s.lobby.Players {

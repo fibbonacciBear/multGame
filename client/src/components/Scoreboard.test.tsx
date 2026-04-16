@@ -42,12 +42,12 @@ describe("Scoreboard", () => {
     );
 
     expect(screen.getByText("00:10")).toBeTruthy();
-    const nebulaMode = screen.getByRole("button", { name: "Nebula mode" }) as HTMLButtonElement;
-    const pulsarMode = screen.getByRole("button", { name: "Pulsar mode" }) as HTMLButtonElement;
-    const quasarMode = screen.getByRole("button", { name: "Quasar mode" }) as HTMLButtonElement;
-    expect(nebulaMode.disabled).toBe(true);
-    expect(pulsarMode.disabled).toBe(true);
-    expect(quasarMode.disabled).toBe(true);
+    const nebulaMode = screen.getByRole("button", { name: "Nebula mode" });
+    const pulsarMode = screen.getByRole("button", { name: "Pulsar mode" });
+    const quasarMode = screen.getByRole("button", { name: "Quasar mode" });
+    expect(nebulaMode.matches(":disabled")).toBe(true);
+    expect(pulsarMode.matches(":disabled")).toBe(true);
+    expect(quasarMode.matches(":disabled")).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Leave Lobby" }));
 
