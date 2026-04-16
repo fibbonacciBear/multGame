@@ -60,6 +60,7 @@ const (
 	defaultPassiveHealDelay  = 1500 * time.Millisecond
 	defaultDisconnectGrace   = 10 * time.Second
 	defaultIntermission      = 10 * time.Second
+	projectileTypeRailgun    = "railgun"
 )
 
 var palette = []string{
@@ -291,6 +292,7 @@ type Collectible struct {
 type Projectile struct {
 	ID        string
 	OwnerID   string
+	Type      string
 	Color     string
 	X         float64
 	Y         float64
@@ -377,8 +379,11 @@ type snapshotShot struct {
 	ID      string  `json:"id"`
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
+	VX      float64 `json:"vx"`
+	VY      float64 `json:"vy"`
 	Radius  float64 `json:"radius"`
 	OwnerID string  `json:"ownerId"`
+	Type    string  `json:"type"`
 	Color   string  `json:"color"`
 }
 
@@ -1035,6 +1040,7 @@ func (s *Server) spawnProjectileLocked(player *Player, now time.Time) {
 	shot := &Projectile{
 		ID:        randomID("shot"),
 		OwnerID:   player.ID,
+		Type:      projectileTypeRailgun,
 		Color:     player.Color,
 		X:         player.X + math.Cos(player.Angle)*(s.radiusForMass(player.Mass)+10),
 		Y:         player.Y + math.Sin(player.Angle)*(s.radiusForMass(player.Mass)+10),
@@ -1191,12 +1197,19 @@ func (s *Server) snapshotPlayersLocked(now time.Time) []snapshotPlayer {
 func (s *Server) snapshotProjectilesLocked() []snapshotShot {
 	shots := make([]snapshotShot, 0, len(s.lobby.Projectiles))
 	for _, projectile := range s.lobby.Projectiles {
+		projectileType := projectile.Type
+		if projectileType == "" {
+			projectileType = projectileTypeRailgun
+		}
 		shots = append(shots, snapshotShot{
 			ID:      projectile.ID,
 			X:       projectile.X,
 			Y:       projectile.Y,
+			VX:      projectile.VX,
+			VY:      projectile.VY,
 			Radius:  projectile.Radius,
 			OwnerID: projectile.OwnerID,
+			Type:    projectileType,
 			Color:   projectile.Color,
 		})
 	}

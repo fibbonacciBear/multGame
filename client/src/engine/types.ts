@@ -36,8 +36,11 @@ export type Projectile = {
   id: string;
   x: number;
   y: number;
+  vx: number;
+  vy: number;
   radius: number;
   ownerId: string;
+  type: "railgun" | string;
   color: string;
 };
 

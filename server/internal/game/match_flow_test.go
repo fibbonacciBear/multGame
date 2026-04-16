@@ -289,3 +289,30 @@ func TestResetMatchLockedDropsDisconnectedHumans(t *testing.T) {
 		t.Fatalf("phase = %q, want %q", server.lobby.Phase, phaseActive)
 	}
 }
+
+func TestSnapshotProjectilesIncludeHeadingAndType(t *testing.T) {
+	server := newClassicTestServer()
+	server.lobby.Projectiles = []*Projectile{{
+		ID:      "shot-1",
+		OwnerID: "player-1",
+		Type:    projectileTypeRailgun,
+		Color:   "#68e1fd",
+		X:       100,
+		Y:       200,
+		VX:      1200,
+		VY:      100,
+		Radius:  server.cfg.ProjectileRadius,
+	}}
+
+	shots := server.snapshotProjectilesLocked()
+
+	if len(shots) != 1 {
+		t.Fatalf("shots count = %d, want 1", len(shots))
+	}
+	if shots[0].VX != 1200 || shots[0].VY != 100 {
+		t.Fatalf("shot velocity = (%v, %v), want (1200, 100)", shots[0].VX, shots[0].VY)
+	}
+	if shots[0].Type != projectileTypeRailgun {
+		t.Fatalf("shot type = %q, want %q", shots[0].Type, projectileTypeRailgun)
+	}
+}

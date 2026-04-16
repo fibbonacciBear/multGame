@@ -1,9 +1,23 @@
 import { useGameStore } from "../store/gameStore";
-import type { MatchJoinResponse, ServerMessage, SnapshotMessage } from "./types";
+import type { MatchJoinResponse, Projectile, ServerMessage, SnapshotMessage } from "./types";
 
 type SnapshotListener = (snapshot: SnapshotMessage) => void;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const MAX_SNAPSHOT_BUFFER_SIZE = 20;
+const DEFAULT_PROJECTILE_TYPE = "railgun";
+const DEFAULT_PROJECTILE_COLOR = "#68e1fd";
+const MIN_HEADING_SPEED = 0.001;
+
+export type ProjectileHeading = {
+  vx: number;
+  vy: number;
+};
+
+type PartialProjectile = Partial<Projectile> & {
+  id?: string;
+  x?: number;
+  y?: number;
+};
 
 function interpolationDelayMs() {
   const raw = import.meta.env.VITE_INTERPOLATION_DELAY_MS;
@@ -39,6 +53,89 @@ function parseServerMessage(data: string): ServerMessage {
   return JSON.parse(data) as ServerMessage;
 }
 
+function finiteOr(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+export function normalizeSnapshotProjectiles(
+  message: SnapshotMessage,
+  previous?: SnapshotMessage,
+  headingCache = new Map<string, ProjectileHeading>(),
+): SnapshotMessage {
+  const previousProjectiles = new Map(
+    previous?.projectiles.map((projectile) => [projectile.id, projectile]),
+  );
+  const projectiles = message.projectiles.map((projectile) =>
+    normalizeProjectile(projectile as PartialProjectile, previousProjectiles, headingCache),
+  );
+  pruneProjectileHeadingCache(headingCache, projectiles);
+
+  return {
+    ...message,
+    projectiles,
+  };
+}
+
+function pruneProjectileHeadingCache(
+  headingCache: Map<string, ProjectileHeading>,
+  projectiles: Projectile[],
+) {
+  if (headingCache.size <= projectiles.length + MAX_SNAPSHOT_BUFFER_SIZE) {
+    return;
+  }
+
+  const activeIds = new Set(projectiles.map((projectile) => projectile.id));
+  for (const id of headingCache.keys()) {
+    if (!activeIds.has(id)) {
+      headingCache.delete(id);
+    }
+  }
+}
+
+function normalizeProjectile(
+  projectile: PartialProjectile,
+  previousProjectiles: Map<string, Projectile>,
+  headingCache: Map<string, ProjectileHeading>,
+): Projectile {
+  const id = projectile.id ?? "shot-unknown";
+  const x = finiteOr(projectile.x, 0);
+  const y = finiteOr(projectile.y, 0);
+  const prior = previousProjectiles.get(id);
+
+  let vx = finiteOr(projectile.vx, Number.NaN);
+  let vy = finiteOr(projectile.vy, Number.NaN);
+  const speed = Math.hypot(vx, vy);
+  if (!Number.isFinite(speed) || speed <= MIN_HEADING_SPEED) {
+    const dx = prior ? x - prior.x : 0;
+    const dy = prior ? y - prior.y : 0;
+    if (Math.hypot(dx, dy) > MIN_HEADING_SPEED) {
+      vx = dx;
+      vy = dy;
+    } else {
+      const cached = headingCache.get(id);
+      vx = cached?.vx ?? 1;
+      vy = cached?.vy ?? 0;
+    }
+  }
+
+  const normalizedSpeed = Math.hypot(vx, vy);
+  if (Number.isFinite(normalizedSpeed) && normalizedSpeed > MIN_HEADING_SPEED) {
+    headingCache.set(id, { vx, vy });
+  }
+
+  return {
+    id,
+    x,
+    y,
+    vx,
+    vy,
+    radius: finiteOr(projectile.radius, 0),
+    ownerId: typeof projectile.ownerId === "string" ? projectile.ownerId : "",
+    type: typeof projectile.type === "string" && projectile.type !== "" ? projectile.type : DEFAULT_PROJECTILE_TYPE,
+    color: typeof projectile.color === "string" && projectile.color !== "" ? projectile.color : DEFAULT_PROJECTILE_COLOR,
+  };
+}
+
 export class NetworkClient {
   private tokenExpiryMs?: number;
   private match: MatchJoinResponse;
@@ -46,6 +143,7 @@ export class NetworkClient {
   private readonly refreshMatch?: () => Promise<MatchJoinResponse>;
   private socket?: WebSocket;
   private snapshotBuffer: SnapshotMessage[] = [];
+  private projectileHeadingCache = new Map<string, ProjectileHeading>();
   private disposed = false;
   private reconnectTimer?: number;
   private reconnectAttempts = 0;
@@ -113,18 +211,25 @@ export class NetworkClient {
         if (!message.projectiles) message.projectiles = [];
         if (!message.objects) message.objects = [];
 
-        this.snapshotBuffer = [...this.snapshotBuffer, message].slice(-MAX_SNAPSHOT_BUFFER_SIZE);
+        const normalizedMessage = normalizeSnapshotProjectiles(
+          message,
+          this.snapshotBuffer[this.snapshotBuffer.length - 1],
+          this.projectileHeadingCache,
+        );
+        this.snapshotBuffer = [...this.snapshotBuffer, normalizedMessage].slice(
+          -MAX_SNAPSHOT_BUFFER_SIZE,
+        );
         useGameStore.getState().setSnapshotState({
-          matchTimerMs: message.timeRemainingMs,
-          killFeed: message.killFeed,
-          self: message.you,
-          matchOver: message.matchOver,
-          intermissionRemainingMs: message.intermissionRemainingMs ?? 0,
-          scoreboard: message.scoreboard,
-          serverNotice: message.serverNotice,
+          matchTimerMs: normalizedMessage.timeRemainingMs,
+          killFeed: normalizedMessage.killFeed,
+          self: normalizedMessage.you,
+          matchOver: normalizedMessage.matchOver,
+          intermissionRemainingMs: normalizedMessage.intermissionRemainingMs ?? 0,
+          scoreboard: normalizedMessage.scoreboard,
+          serverNotice: normalizedMessage.serverNotice,
         });
         for (const listener of this.snapshotListeners) {
-          listener(message);
+          listener(normalizedMessage);
         }
       }
     });

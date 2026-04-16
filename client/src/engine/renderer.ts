@@ -1,10 +1,12 @@
-import type { SnapshotMessage, WorldObject, WorldPlayer } from "./types";
+import type { Projectile, SnapshotMessage, WorldObject, WorldPlayer } from "./types";
+import { getRailgunSprites, railgunCullRadius, type RailgunSprite } from "./projectileSprites";
 
 const BASE_HEALTH_BAR_WIDTH = 44;
 const BASELINE_MAX_HEALTH = 100;
 const STARFIELD_SEED = "game-space-v1";
 const AMBIENT_STAR_COLORS = ["#cde4ff", "#b3d4ff", "#adc8ff", "#ffe9c6", "#ffe0bc"];
 const HERO_STAR_COLORS = ["#dbeeff", "#cce5ff", "#d8ecff", "#ffdeb0", "#ffedd3"];
+const MIN_PROJECTILE_HEADING_SPEED = 0.001;
 
 type StarPoint = {
   x: number;
@@ -21,10 +23,37 @@ type ScreenStarfield = {
   hero: StarPoint[];
 };
 
+type ProjectileRenderData = {
+  projectile: Projectile;
+  angle: number;
+  glow: RailgunSprite;
+  core: RailgunSprite;
+};
+
 let screenStarfieldCache: ScreenStarfield | undefined;
+const projectileHeadingCache = new Map<string, number>();
+let lastProjectileMatchId = "";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function isWithinViewport(
+  x: number,
+  y: number,
+  radius: number,
+  camX: number,
+  camY: number,
+  width: number,
+  height: number,
+  margin = 48,
+) {
+  return (
+    x + radius >= camX - margin &&
+    x - radius <= camX + width + margin &&
+    y + radius >= camY - margin &&
+    y - radius <= camY + height + margin
+  );
 }
 
 function hashSeed(seed: string): number {
@@ -213,7 +242,102 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: WorldPlayer) {
   ctx.fillRect(x, y, width * ratio, height);
 }
 
+function projectileAngle(projectile: Projectile) {
+  const speed = Math.hypot(projectile.vx, projectile.vy);
+  if (Number.isFinite(speed) && speed > MIN_PROJECTILE_HEADING_SPEED) {
+    const angle = Math.atan2(projectile.vy, projectile.vx);
+    projectileHeadingCache.set(projectile.id, angle);
+    return angle;
+  }
+
+  return projectileHeadingCache.get(projectile.id) ?? 0;
+}
+
+function pruneProjectileAngleCache(projectiles: Projectile[], matchId: string) {
+  if (lastProjectileMatchId !== matchId) {
+    projectileHeadingCache.clear();
+    lastProjectileMatchId = matchId;
+    return;
+  }
+
+  if (projectileHeadingCache.size <= projectiles.length + 64) {
+    return;
+  }
+
+  const activeIds = new Set(projectiles.map((projectile) => projectile.id));
+  for (const id of projectileHeadingCache.keys()) {
+    if (!activeIds.has(id)) {
+      projectileHeadingCache.delete(id);
+    }
+  }
+}
+
+function drawProjectileSprite(ctx: CanvasRenderingContext2D, data: ProjectileRenderData, sprite: RailgunSprite) {
+  ctx.save();
+  ctx.translate(data.projectile.x, data.projectile.y);
+  ctx.rotate(data.angle);
+  ctx.drawImage(sprite.canvas, -sprite.originX, -sprite.originY, sprite.width, sprite.height);
+  ctx.restore();
+}
+
+function drawProjectiles(
+  ctx: CanvasRenderingContext2D,
+  projectiles: Projectile[],
+  matchId: string,
+  camX: number,
+  camY: number,
+  width: number,
+  height: number,
+) {
+  ctx.globalAlpha = 1;
+  pruneProjectileAngleCache(projectiles, matchId);
+
+  const renderables: ProjectileRenderData[] = [];
+  const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const cullRadius = railgunCullRadius();
+
+  for (const projectile of projectiles) {
+    if (projectile.type !== "railgun") {
+      continue;
+    }
+
+    if (!isWithinViewport(projectile.x, projectile.y, cullRadius, camX, camY, width, height)) {
+      continue;
+    }
+
+    const sprites = getRailgunSprites(projectile, dpr);
+    renderables.push({
+      projectile,
+      angle: projectileAngle(projectile),
+      glow: sprites.glow,
+      core: sprites.core,
+    });
+  }
+
+  if (renderables.length === 0) {
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  ctx.save();
+
+  ctx.globalCompositeOperation = "lighter";
+  for (const renderable of renderables) {
+    drawProjectileSprite(ctx, renderable, renderable.glow);
+  }
+
+  ctx.globalCompositeOperation = "source-over";
+  for (const renderable of renderables) {
+    drawProjectileSprite(ctx, renderable, renderable.core);
+  }
+
+  ctx.restore();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+}
+
 function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: boolean) {
+  ctx.globalAlpha = 1;
   drawHealthBar(ctx, player);
 
   ctx.beginPath();
@@ -271,16 +395,12 @@ export function renderWorld(
 
   drawObjects(ctx, snapshot.objects, camX, camY, width, height);
 
-  for (const projectile of snapshot.projectiles) {
-    ctx.beginPath();
-    ctx.arc(projectile.x, projectile.y, projectile.radius, 0, Math.PI * 2);
-    ctx.fillStyle = projectile.color;
-    ctx.fill();
-  }
+  drawProjectiles(ctx, snapshot.projectiles, snapshot.matchId, camX, camY, width, height);
 
   snapshot.players
     .filter((player) => player.isAlive)
     .forEach((player) => drawPlayer(ctx, player, player.id === localPlayerId));
 
   ctx.restore();
+  ctx.globalAlpha = 1;
 }
