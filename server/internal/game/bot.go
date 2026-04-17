@@ -156,16 +156,17 @@ func (s *Server) closestTargetLocked(source *Player, players []*Player) (*Player
 
 func (s *Server) newBotLocked(now time.Time) *Player {
 	bot := &Player{
-		ID:         randomID("bot"),
-		Name:       fmt.Sprintf("Bot-%02d", s.rng.Intn(90)+10),
-		Color:      s.randomColor(),
-		IsBot:      true,
-		Alive:      true,
-		Connected:  false,
-		Mass:       s.cfg.StartingMass,
-		Health:     s.maxHealthForMass(s.cfg.StartingMass),
-		LastShotAt: now.Add(-s.cfg.ShootCooldown),
-		BotLevel:   s.chooseBotLevelLocked(),
+		ID:            randomID("bot"),
+		Name:          fmt.Sprintf("Bot-%02d", s.rng.Intn(90)+10),
+		Color:         s.randomColor(),
+		SpriteVariant: s.randomSpriteVariant(),
+		IsBot:         true,
+		Alive:         true,
+		Connected:     false,
+		Mass:          s.cfg.StartingMass,
+		Health:        s.maxHealthForMass(s.cfg.StartingMass),
+		LastShotAt:    now.Add(-s.cfg.ShootCooldown),
+		BotLevel:      s.chooseBotLevelLocked(),
 	}
 	usedFallback := s.spawnPlayerAtRandomPositionLocked(bot)
 	s.applySpawnSafetyLocked(bot, now, usedFallback)

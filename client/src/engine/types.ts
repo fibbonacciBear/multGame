@@ -9,6 +9,8 @@ export type MatchJoinResponse = {
 export type WorldPlayer = {
   id: string;
   name: string;
+  spriteId?: string;
+  spriteVariant?: number;
   x: number;
   y: number;
   vx: number;

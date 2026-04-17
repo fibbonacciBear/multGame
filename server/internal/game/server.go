@@ -246,6 +246,7 @@ type Player struct {
 	ID                     string
 	Name                   string
 	Color                  string
+	SpriteVariant          int
 	IsBot                  bool
 	Connected              bool
 	Connection             *ClientConnection
@@ -358,21 +359,22 @@ type worldBounds struct {
 }
 
 type snapshotPlayer struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	X           float64 `json:"x"`
-	Y           float64 `json:"y"`
-	VX          float64 `json:"vx"`
-	VY          float64 `json:"vy"`
-	Mass        float64 `json:"mass"`
-	Radius      float64 `json:"radius"`
-	Angle       float64 `json:"angle"`
-	Health      float64 `json:"health"`
-	MaxHealth   float64 `json:"maxHealth"`
-	IsAlive     bool    `json:"isAlive"`
-	RespawnInMs int64   `json:"respawnInMs"`
-	IsBot       bool    `json:"isBot"`
-	Color       string  `json:"color"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	SpriteVariant int     `json:"spriteVariant"`
+	X             float64 `json:"x"`
+	Y             float64 `json:"y"`
+	VX            float64 `json:"vx"`
+	VY            float64 `json:"vy"`
+	Mass          float64 `json:"mass"`
+	Radius        float64 `json:"radius"`
+	Angle         float64 `json:"angle"`
+	Health        float64 `json:"health"`
+	MaxHealth     float64 `json:"maxHealth"`
+	IsAlive       bool    `json:"isAlive"`
+	RespawnInMs   int64   `json:"respawnInMs"`
+	IsBot         bool    `json:"isBot"`
+	Color         string  `json:"color"`
 }
 
 type snapshotShot struct {
@@ -958,9 +960,10 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 			s.removeOneBotLocked()
 		}
 		player = &Player{
-			ID:    id,
-			Name:  sanitizeName(name),
-			Color: s.randomColor(),
+			ID:            id,
+			Name:          sanitizeName(name),
+			Color:         s.randomColor(),
+			SpriteVariant: s.randomSpriteVariant(),
 		}
 		player.Mass = s.cfg.StartingMass
 		player.Health = s.maxHealthForMass(player.Mass)
@@ -1183,21 +1186,22 @@ func (s *Server) snapshotPlayersLocked(now time.Time) []snapshotPlayer {
 			respawnIn = player.RespawnAt.Sub(now).Milliseconds()
 		}
 		players = append(players, snapshotPlayer{
-			ID:          player.ID,
-			Name:        player.Name,
-			X:           player.X,
-			Y:           player.Y,
-			VX:          player.VX,
-			VY:          player.VY,
-			Mass:        player.Mass,
-			Radius:      s.radiusForMass(player.Mass),
-			Angle:       player.Angle,
-			Health:      player.Health,
-			MaxHealth:   s.maxHealthForMass(player.Mass),
-			IsAlive:     player.Alive,
-			RespawnInMs: respawnIn,
-			IsBot:       player.IsBot,
-			Color:       player.Color,
+			ID:            player.ID,
+			Name:          player.Name,
+			SpriteVariant: player.SpriteVariant,
+			X:             player.X,
+			Y:             player.Y,
+			VX:            player.VX,
+			VY:            player.VY,
+			Mass:          player.Mass,
+			Radius:        s.radiusForMass(player.Mass),
+			Angle:         player.Angle,
+			Health:        player.Health,
+			MaxHealth:     s.maxHealthForMass(player.Mass),
+			IsAlive:       player.Alive,
+			RespawnInMs:   respawnIn,
+			IsBot:         player.IsBot,
+			Color:         player.Color,
 		})
 	}
 	return players
@@ -1320,6 +1324,10 @@ func (s *Server) randFloat(min, max float64) float64 {
 
 func (s *Server) randomColor() string {
 	return palette[s.rng.Intn(len(palette))]
+}
+
+func (s *Server) randomSpriteVariant() int {
+	return int(s.rng.Int31())
 }
 
 func maxInt64(value, min int64) int64 {

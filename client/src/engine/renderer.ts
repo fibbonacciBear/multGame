@@ -1,6 +1,11 @@
 import type { Projectile, SnapshotMessage, WorldObject, WorldPlayer } from "./types";
 import { getRailgunSprites, railgunCullRadius, type RailgunSprite } from "./projectileSprites";
-import testPlayerSpriteUrl from "../assets/sprites/players/test-player.png";
+import {
+  DEFAULT_PLAYER_SPRITE_ID,
+  getPlayerSpriteIdForVariant,
+  getPlayerSpriteUrl,
+  hasPlayerSpriteId,
+} from "./playerSprites";
 
 const BASE_HEALTH_BAR_WIDTH = 44;
 const BASELINE_MAX_HEALTH = 100;
@@ -11,9 +16,13 @@ const MIN_PROJECTILE_HEADING_SPEED = 0.001;
 const PLAYER_SPRITE_SCALE = 2.4;
 const SHOW_HITBOX_DEBUG = import.meta.env.VITE_SHOW_HITBOX_DEBUG === "true";
 
-let playerSpriteImage: HTMLImageElement | undefined;
-let playerSpriteReady = false;
-let playerSpriteFailed = false;
+type PlayerSpriteImageState = {
+  image?: HTMLImageElement;
+  ready: boolean;
+  failed: boolean;
+};
+
+const playerSpriteImageCache = new Map<string, PlayerSpriteImageState>();
 
 type StarPoint = {
   x: number;
@@ -249,23 +258,51 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: WorldPlayer) {
   ctx.fillRect(x, y, width * ratio, height);
 }
 
-function ensurePlayerSpriteLoaded() {
-  if (playerSpriteReady || playerSpriteFailed || playerSpriteImage) {
-    return;
+function resolvePlayerSpriteId(spriteId?: string, spriteVariant?: number): string {
+  const candidateSpriteId = spriteId ?? "";
+  if (hasPlayerSpriteId(candidateSpriteId)) {
+    return candidateSpriteId;
   }
+  const variantSpriteId = getPlayerSpriteIdForVariant(spriteVariant);
+  if (hasPlayerSpriteId(variantSpriteId)) {
+    return variantSpriteId;
+  }
+  return DEFAULT_PLAYER_SPRITE_ID;
+}
+
+function getOrCreatePlayerSpriteImageState(
+  spriteId?: string,
+  spriteVariant?: number,
+): PlayerSpriteImageState {
+  const resolvedSpriteId = resolvePlayerSpriteId(spriteId, spriteVariant);
+  const cached = playerSpriteImageCache.get(resolvedSpriteId);
+  if (cached) {
+    return cached;
+  }
+
+  const state: PlayerSpriteImageState = {
+    ready: false,
+    failed: false,
+  };
+
   if (typeof Image === "undefined") {
-    playerSpriteFailed = true;
-    return;
+    state.failed = true;
+    playerSpriteImageCache.set(resolvedSpriteId, state);
+    return state;
   }
+
   const image = new Image();
   image.onload = () => {
-    playerSpriteReady = true;
+    state.ready = true;
   };
   image.onerror = () => {
-    playerSpriteFailed = true;
+    state.failed = true;
   };
-  image.src = testPlayerSpriteUrl;
-  playerSpriteImage = image;
+  image.src = getPlayerSpriteUrl(resolvedSpriteId);
+  state.image = image;
+
+  playerSpriteImageCache.set(resolvedSpriteId, state);
+  return state;
 }
 
 function drawPlayerCircleFallback(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: boolean) {
@@ -279,9 +316,9 @@ function drawPlayerCircleFallback(ctx: CanvasRenderingContext2D, player: WorldPl
 }
 
 function drawPlayerSprite(ctx: CanvasRenderingContext2D, player: WorldPlayer) {
-  ensurePlayerSpriteLoaded();
-  const image = playerSpriteImage;
-  if (!playerSpriteReady || !image || !image.complete) {
+  const spriteState = getOrCreatePlayerSpriteImageState(player.spriteId, player.spriteVariant);
+  const image = spriteState.image;
+  if (!spriteState.ready || spriteState.failed || !image || !image.complete) {
     return false;
   }
 
