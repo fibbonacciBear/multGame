@@ -11,6 +11,7 @@ import type { MatchJoinResponse, SnapshotMessage } from "../engine/types";
 import { useGameStore } from "../store/gameStore";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+const UI_SNAPSHOT_INTERVAL_MS = 150;
 
 type GameLocationState = {
   match?: MatchJoinResponse;
@@ -18,6 +19,9 @@ type GameLocationState = {
 
 export default function GamePage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const latestUiSnapshotRef = useRef<SnapshotMessage>();
+  const uiSnapshotTimerRef = useRef<number | undefined>(undefined);
+  const hasPublishedInitialSnapshotRef = useRef(false);
   const location = useLocation();
   const navigate = useNavigate();
   const [snapshot, setSnapshot] = useState<SnapshotMessage>();
@@ -49,9 +53,31 @@ export default function GamePage() {
         return (await response.json()) as MatchJoinResponse;
       },
     });
-    const stopWatching = engine.onSnapshot((next: SnapshotMessage) => setSnapshot(next));
+    hasPublishedInitialSnapshotRef.current = false;
+    const publishSnapshot = () => {
+      uiSnapshotTimerRef.current = undefined;
+      if (latestUiSnapshotRef.current) {
+        setSnapshot(latestUiSnapshotRef.current);
+      }
+    };
+    const stopWatching = engine.onSnapshot((next: SnapshotMessage) => {
+      latestUiSnapshotRef.current = next;
+      if (!hasPublishedInitialSnapshotRef.current) {
+        hasPublishedInitialSnapshotRef.current = true;
+        setSnapshot(next);
+        return;
+      }
+      if (uiSnapshotTimerRef.current !== undefined) {
+        return;
+      }
+      uiSnapshotTimerRef.current = window.setTimeout(publishSnapshot, UI_SNAPSHOT_INTERVAL_MS);
+    });
 
     return () => {
+      if (uiSnapshotTimerRef.current !== undefined) {
+        window.clearTimeout(uiSnapshotTimerRef.current);
+        uiSnapshotTimerRef.current = undefined;
+      }
       stopWatching();
       engine.dispose();
     };

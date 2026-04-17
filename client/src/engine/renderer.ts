@@ -2,7 +2,6 @@ import type { Projectile, SnapshotMessage, WorldObject, WorldPlayer } from "./ty
 import { getRailgunSprites, railgunCullRadius, type RailgunSprite } from "./projectileSprites";
 import {
   DEFAULT_PLAYER_SPRITE_ID,
-  getAvailablePlayerSpriteIds,
   getPlayerSpriteIdForVariant,
   getPlayerSpriteUrl,
   hasPlayerSpriteId,
@@ -16,6 +15,7 @@ const HERO_STAR_COLORS = ["#dbeeff", "#cce5ff", "#d8ecff", "#ffdeb0", "#ffedd3"]
 const MIN_PROJECTILE_HEADING_SPEED = 0.001;
 const PLAYER_SPRITE_SCALE = 2.4;
 const SHOW_HITBOX_DEBUG = import.meta.env.VITE_SHOW_HITBOX_DEBUG === "true";
+const MASS_COLOR_BUCKETS = 64;
 
 type PlayerSpriteImageState = {
   image?: HTMLImageElement;
@@ -24,7 +24,6 @@ type PlayerSpriteImageState = {
 };
 
 const playerSpriteImageCache = new Map<string, PlayerSpriteImageState>();
-let playerSpriteCachePrimed = false;
 
 type StarPoint = {
   x: number;
@@ -41,6 +40,15 @@ type ScreenStarfield = {
   hero: StarPoint[];
 };
 
+type CachedBackgroundLayers = {
+  width: number;
+  height: number;
+  dpr: number;
+  base?: HTMLCanvasElement;
+  ambient?: HTMLCanvasElement;
+  hero?: HTMLCanvasElement;
+};
+
 type ProjectileRenderData = {
   projectile: Projectile;
   angle: number;
@@ -49,8 +57,11 @@ type ProjectileRenderData = {
 };
 
 let screenStarfieldCache: ScreenStarfield | undefined;
+let backgroundLayerCache: CachedBackgroundLayers | undefined;
 const projectileHeadingCache = new Map<string, number>();
+const objectMassColorCache = new Map<number, string>();
 let lastProjectileMatchId = "";
+const projectileRenderablesScratch: ProjectileRenderData[] = [];
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -171,23 +182,159 @@ function wrap(value: number, size: number): number {
   return ((value % size) + size) % size;
 }
 
-function drawStarLayer(
-  ctx: CanvasRenderingContext2D,
-  stars: StarPoint[],
-  width: number,
-  height: number,
-  camX: number,
-  camY: number,
-  parallax: number,
-) {
+function drawStarLayerToCanvas(ctx: CanvasRenderingContext2D, stars: StarPoint[]) {
   for (const star of stars) {
-    const x = wrap(star.x - camX * parallax, width);
-    const y = wrap(star.y - camY * parallax, height);
     ctx.beginPath();
-    ctx.arc(x, y, star.radius, 0, Math.PI * 2);
+    ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
     ctx.globalAlpha = star.alpha;
     ctx.fillStyle = star.color;
     ctx.fill();
+  }
+}
+
+function createLayerCanvas() {
+  if (typeof document === "undefined") {
+    return undefined;
+  }
+  const canvas = document.createElement("canvas");
+  return canvas;
+}
+
+function normalizeDpr(dpr: number) {
+  if (!Number.isFinite(dpr) || dpr <= 0) {
+    return 1;
+  }
+  return Math.round(dpr * 100) / 100;
+}
+
+function getBackgroundLayers(width: number, height: number, dpr: number): CachedBackgroundLayers {
+  const normalizedDpr = normalizeDpr(dpr);
+  const cached = backgroundLayerCache;
+  if (
+    cached &&
+    cached.width === width &&
+    cached.height === height &&
+    cached.dpr === normalizedDpr
+  ) {
+    return cached;
+  }
+
+  const starfield = getScreenStarfield(width, height);
+  const layers: CachedBackgroundLayers = { width, height, dpr: normalizedDpr };
+
+  const baseCanvas = createLayerCanvas();
+  if (baseCanvas) {
+    baseCanvas.width = Math.ceil(width * normalizedDpr);
+    baseCanvas.height = Math.ceil(height * normalizedDpr);
+    const baseCtx = baseCanvas.getContext("2d");
+    if (baseCtx) {
+      baseCtx.setTransform(normalizedDpr, 0, 0, normalizedDpr, 0, 0);
+      baseCtx.fillStyle = "#01040b";
+      baseCtx.fillRect(0, 0, width, height);
+      const glow = baseCtx.createRadialGradient(
+        width * 0.5,
+        height * 0.3,
+        0,
+        width * 0.5,
+        height * 0.3,
+        Math.max(width, height) * 0.95,
+      );
+      glow.addColorStop(0, "rgba(34, 71, 128, 0.2)");
+      glow.addColorStop(0.45, "rgba(16, 35, 75, 0.13)");
+      glow.addColorStop(1, "rgba(2, 5, 13, 0)");
+      baseCtx.fillStyle = glow;
+      baseCtx.fillRect(0, 0, width, height);
+      layers.base = baseCanvas;
+    }
+  }
+
+  const ambientCanvas = createLayerCanvas();
+  if (ambientCanvas) {
+    ambientCanvas.width = Math.ceil(width * normalizedDpr);
+    ambientCanvas.height = Math.ceil(height * normalizedDpr);
+    const ambientCtx = ambientCanvas.getContext("2d");
+    if (ambientCtx) {
+      ambientCtx.setTransform(normalizedDpr, 0, 0, normalizedDpr, 0, 0);
+      drawStarLayerToCanvas(ambientCtx, starfield.ambient);
+      ambientCtx.globalAlpha = 1;
+      layers.ambient = ambientCanvas;
+    }
+  }
+
+  const heroCanvas = createLayerCanvas();
+  if (heroCanvas) {
+    heroCanvas.width = Math.ceil(width * normalizedDpr);
+    heroCanvas.height = Math.ceil(height * normalizedDpr);
+    const heroCtx = heroCanvas.getContext("2d");
+    if (heroCtx) {
+      heroCtx.setTransform(normalizedDpr, 0, 0, normalizedDpr, 0, 0);
+      drawStarLayerToCanvas(heroCtx, starfield.hero);
+      heroCtx.globalAlpha = 1;
+      layers.hero = heroCanvas;
+    }
+  }
+
+  backgroundLayerCache = layers;
+  return layers;
+}
+
+function drawWrappedLayer(
+  ctx: CanvasRenderingContext2D,
+  layer: HTMLCanvasElement,
+  width: number,
+  height: number,
+  offsetX: number,
+  offsetY: number,
+) {
+  const startX = -wrap(offsetX, width);
+  const startY = -wrap(offsetY, height);
+  const scaleX = width > 0 ? layer.width / width : 1;
+  const scaleY = height > 0 ? layer.height / height : 1;
+  ctx.drawImage(layer, startX, startY, width, height);
+
+  const seamWidth = Math.ceil(-startX);
+  const seamHeight = Math.ceil(-startY);
+
+  if (seamWidth > 0) {
+    ctx.drawImage(
+      layer,
+      0,
+      0,
+      seamWidth * scaleX,
+      height * scaleY,
+      width - seamWidth,
+      startY,
+      seamWidth,
+      height,
+    );
+  }
+
+  if (seamHeight > 0) {
+    ctx.drawImage(
+      layer,
+      0,
+      0,
+      width * scaleX,
+      seamHeight * scaleY,
+      startX,
+      height - seamHeight,
+      width,
+      seamHeight,
+    );
+  }
+
+  if (seamWidth > 0 && seamHeight > 0) {
+    ctx.drawImage(
+      layer,
+      0,
+      0,
+      seamWidth * scaleX,
+      seamHeight * scaleY,
+      width - seamWidth,
+      height - seamHeight,
+      seamWidth,
+      seamHeight,
+    );
   }
 }
 
@@ -198,34 +345,38 @@ function drawSpaceBackground(
   camX: number,
   camY: number,
 ) {
-  ctx.fillStyle = "#01040b";
-  ctx.fillRect(0, 0, width, height);
+  const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const layers = getBackgroundLayers(width, height, dpr);
+  if (layers.base) {
+    ctx.drawImage(layers.base, 0, 0, width, height);
+  } else {
+    ctx.fillStyle = "#01040b";
+    ctx.fillRect(0, 0, width, height);
+  }
 
-  const glow = ctx.createRadialGradient(
-    width * 0.5,
-    height * 0.3,
-    0,
-    width * 0.5,
-    height * 0.3,
-    Math.max(width, height) * 0.95,
-  );
-  glow.addColorStop(0, "rgba(34, 71, 128, 0.2)");
-  glow.addColorStop(0.45, "rgba(16, 35, 75, 0.13)");
-  glow.addColorStop(1, "rgba(2, 5, 13, 0)");
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, width, height);
-
-  const starfield = getScreenStarfield(width, height);
-  drawStarLayer(ctx, starfield.ambient, width, height, camX, camY, 0.006);
-  drawStarLayer(ctx, starfield.hero, width, height, camX, camY, 0.014);
+  if (layers.ambient) {
+    drawWrappedLayer(ctx, layers.ambient, width, height, camX * 0.006, camY * 0.006);
+  }
+  if (layers.hero) {
+    drawWrappedLayer(ctx, layers.hero, width, height, camX * 0.014, camY * 0.014);
+  }
   ctx.globalAlpha = 1;
 }
 
 function objectMassColor(mass: number) {
   const t = clamp((mass - 0.35) / 0.8, 0, 1);
-  const r = Math.round(72 + 160 * t);
-  const g = Math.round(224 - 100 * t);
-  return `rgb(${r},${g},50)`;
+  const bucket = Math.round(t * MASS_COLOR_BUCKETS);
+  const cached = objectMassColorCache.get(bucket);
+  if (cached) {
+    return cached;
+  }
+
+  const normalized = bucket / MASS_COLOR_BUCKETS;
+  const r = Math.round(72 + 160 * normalized);
+  const g = Math.round(224 - 100 * normalized);
+  const color = `rgb(${r},${g},50)`;
+  objectMassColorCache.set(bucket, color);
+  return color;
 }
 
 function drawObjects(ctx: CanvasRenderingContext2D, objects: WorldObject[], camX: number, camY: number, width: number, height: number) {
@@ -307,17 +458,6 @@ function getOrCreatePlayerSpriteImageState(
   return state;
 }
 
-function primePlayerSpriteCache() {
-  if (playerSpriteCachePrimed) {
-    return;
-  }
-  playerSpriteCachePrimed = true;
-  const spriteIds = getAvailablePlayerSpriteIds();
-  for (const spriteId of spriteIds) {
-    getOrCreatePlayerSpriteImageState(spriteId);
-  }
-}
-
 function drawPlayerCircleFallback(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: boolean) {
   ctx.beginPath();
   ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
@@ -394,11 +534,12 @@ function pruneProjectileAngleCache(projectiles: Projectile[], matchId: string) {
 }
 
 function drawProjectileSprite(ctx: CanvasRenderingContext2D, data: ProjectileRenderData, sprite: RailgunSprite) {
-  ctx.save();
-  ctx.translate(data.projectile.x, data.projectile.y);
+  const { x, y } = data.projectile;
+  ctx.translate(x, y);
   ctx.rotate(data.angle);
   ctx.drawImage(sprite.canvas, -sprite.originX, -sprite.originY, sprite.width, sprite.height);
-  ctx.restore();
+  ctx.rotate(-data.angle);
+  ctx.translate(-x, -y);
 }
 
 function drawProjectiles(
@@ -413,7 +554,7 @@ function drawProjectiles(
   ctx.globalAlpha = 1;
   pruneProjectileAngleCache(projectiles, matchId);
 
-  const renderables: ProjectileRenderData[] = [];
+  let renderableCount = 0;
   const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
   const cullRadius = railgunCullRadius();
 
@@ -427,15 +568,24 @@ function drawProjectiles(
     }
 
     const sprites = getRailgunSprites(projectile, dpr);
-    renderables.push({
-      projectile,
-      angle: projectileAngle(projectile),
-      glow: sprites.glow,
-      core: sprites.core,
-    });
+    let renderable = projectileRenderablesScratch[renderableCount];
+    if (!renderable) {
+      renderable = {
+        projectile,
+        angle: 0,
+        glow: sprites.glow,
+        core: sprites.core,
+      };
+      projectileRenderablesScratch[renderableCount] = renderable;
+    }
+    renderable.projectile = projectile;
+    renderable.angle = projectileAngle(projectile);
+    renderable.glow = sprites.glow;
+    renderable.core = sprites.core;
+    renderableCount += 1;
   }
 
-  if (renderables.length === 0) {
+  if (renderableCount === 0) {
     ctx.globalAlpha = 1;
     return;
   }
@@ -443,12 +593,14 @@ function drawProjectiles(
   ctx.save();
 
   ctx.globalCompositeOperation = "lighter";
-  for (const renderable of renderables) {
+  for (let index = 0; index < renderableCount; index += 1) {
+    const renderable = projectileRenderablesScratch[index];
     drawProjectileSprite(ctx, renderable, renderable.glow);
   }
 
   ctx.globalCompositeOperation = "source-over";
-  for (const renderable of renderables) {
+  for (let index = 0; index < renderableCount; index += 1) {
+    const renderable = projectileRenderablesScratch[index];
     drawProjectileSprite(ctx, renderable, renderable.core);
   }
 
@@ -462,7 +614,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: 
   drawHealthBar(ctx, player);
 
   const spriteRenderState = drawPlayerSprite(ctx, player);
-  if (spriteRenderState === "failed") {
+  if (spriteRenderState !== "drawn") {
     drawPlayerCircleFallback(ctx, player, isSelf);
   }
 
@@ -497,8 +649,6 @@ function playerCullRadius(player: WorldPlayer) {
   return Math.max(player.radius, spriteHalfLength);
 }
 
-primePlayerSpriteCache();
-
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
   snapshot: SnapshotMessage,
@@ -531,26 +681,27 @@ export function renderWorld(
 
   drawProjectiles(ctx, snapshot.projectiles, snapshot.matchId, camX, camY, width, height);
 
-  snapshot.players
-    .filter((player) => player.isAlive)
-    .forEach((player) => {
-      if (
-        !isWithinViewport(
-          player.x,
-          player.y,
-          playerCullRadius(player),
-          camX,
-          camY,
-          width,
-          height,
-          64,
-        )
-      ) {
-        return;
-      }
-
-      drawPlayer(ctx, player, player.id === localPlayerId);
-    });
+  for (let index = 0; index < snapshot.players.length; index += 1) {
+    const player = snapshot.players[index];
+    if (!player.isAlive) {
+      continue;
+    }
+    if (
+      !isWithinViewport(
+        player.x,
+        player.y,
+        playerCullRadius(player),
+        camX,
+        camY,
+        width,
+        height,
+        64,
+      )
+    ) {
+      continue;
+    }
+    drawPlayer(ctx, player, player.id === localPlayerId);
+  }
 
   ctx.restore();
   ctx.globalAlpha = 1;

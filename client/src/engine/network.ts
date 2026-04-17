@@ -1,5 +1,11 @@
 import { useGameStore } from "../store/gameStore";
-import type { MatchJoinResponse, Projectile, ServerMessage, SnapshotMessage } from "./types";
+import type {
+  MatchJoinResponse,
+  Projectile,
+  ServerMessage,
+  SnapshotMessage,
+  WorldPlayer,
+} from "./types";
 
 type SnapshotListener = (snapshot: SnapshotMessage) => void;
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -144,6 +150,13 @@ export class NetworkClient {
   private socket?: WebSocket;
   private snapshotBuffer: SnapshotMessage[] = [];
   private projectileHeadingCache = new Map<string, ProjectileHeading>();
+  private readonly previousPlayerLookup = new Map<string, WorldPlayer>();
+  private readonly previousProjectileLookup = new Map<string, Projectile>();
+  private readonly interpolatedPlayers = new Map<string, WorldPlayer>();
+  private readonly interpolatedProjectiles = new Map<string, Projectile>();
+  private readonly interpolatedPlayerOutput: WorldPlayer[] = [];
+  private readonly interpolatedProjectileOutput: Projectile[] = [];
+  private interpolatedSnapshotScratch?: SnapshotMessage;
   private disposed = false;
   private reconnectTimer?: number;
   private reconnectAttempts = 0;
@@ -330,6 +343,28 @@ export class NetworkClient {
     return () => this.snapshotListeners.delete(listener);
   }
 
+  private pruneInterpolatedEntityCaches(playerCount: number, projectileCount: number) {
+    if (this.interpolatedPlayers.size > playerCount + MAX_SNAPSHOT_BUFFER_SIZE) {
+      const activePlayerIds = new Set(this.interpolatedPlayerOutput.map((player) => player.id));
+      for (const id of this.interpolatedPlayers.keys()) {
+        if (!activePlayerIds.has(id)) {
+          this.interpolatedPlayers.delete(id);
+        }
+      }
+    }
+
+    if (this.interpolatedProjectiles.size > projectileCount + MAX_SNAPSHOT_BUFFER_SIZE) {
+      const activeProjectileIds = new Set(
+        this.interpolatedProjectileOutput.map((projectile) => projectile.id),
+      );
+      for (const id of this.interpolatedProjectiles.keys()) {
+        if (!activeProjectileIds.has(id)) {
+          this.interpolatedProjectiles.delete(id);
+        }
+      }
+    }
+  }
+
   getInterpolatedSnapshot() {
     if (this.snapshotBuffer.length === 0) {
       return undefined;
@@ -365,37 +400,82 @@ export class NetworkClient {
     const duration = Math.max(current.serverTime - previous.serverTime, 1);
     const t = Math.min(Math.max((renderTime - previous.serverTime) / duration, 0), 1);
 
-    return {
-      ...current,
-      players: current.players.map((player) => {
-        const prior = previous.players.find((candidate) => candidate.id === player.id);
-        if (!prior) {
-          return player;
-        }
-        if (prior.isAlive !== player.isAlive) {
-          return player;
-        }
+    this.previousPlayerLookup.clear();
+    for (const player of previous.players) {
+      this.previousPlayerLookup.set(player.id, player);
+    }
 
-        return {
-          ...player,
-          x: prior.x + (player.x - prior.x) * t,
-          y: prior.y + (player.y - prior.y) * t,
-        };
-      }),
-      objects: current.objects,
-      projectiles: current.projectiles.map((projectile) => {
-        const prior = previous.projectiles.find((candidate) => candidate.id === projectile.id);
-        if (!prior) {
-          return projectile;
-        }
+    this.previousProjectileLookup.clear();
+    for (const projectile of previous.projectiles) {
+      this.previousProjectileLookup.set(projectile.id, projectile);
+    }
 
-        return {
-          ...projectile,
-          x: prior.x + (projectile.x - prior.x) * t,
-          y: prior.y + (projectile.y - prior.y) * t,
-        };
-      }),
-    };
+    this.interpolatedPlayerOutput.length = current.players.length;
+    for (let index = 0; index < current.players.length; index += 1) {
+      const player = current.players[index];
+      const prior = this.previousPlayerLookup.get(player.id);
+      if (!prior || prior.isAlive !== player.isAlive) {
+        this.interpolatedPlayerOutput[index] = player;
+        continue;
+      }
+
+      let interpolated = this.interpolatedPlayers.get(player.id);
+      if (!interpolated) {
+        interpolated = { ...player };
+        this.interpolatedPlayers.set(player.id, interpolated);
+      }
+      Object.assign(interpolated, player);
+      interpolated.x = prior.x + (player.x - prior.x) * t;
+      interpolated.y = prior.y + (player.y - prior.y) * t;
+      this.interpolatedPlayerOutput[index] = interpolated;
+    }
+
+    this.interpolatedProjectileOutput.length = current.projectiles.length;
+    for (let index = 0; index < current.projectiles.length; index += 1) {
+      const projectile = current.projectiles[index];
+      const prior = this.previousProjectileLookup.get(projectile.id);
+      if (!prior) {
+        this.interpolatedProjectileOutput[index] = projectile;
+        continue;
+      }
+
+      let interpolated = this.interpolatedProjectiles.get(projectile.id);
+      if (!interpolated) {
+        interpolated = { ...projectile };
+        this.interpolatedProjectiles.set(projectile.id, interpolated);
+      }
+      Object.assign(interpolated, projectile);
+      interpolated.x = prior.x + (projectile.x - prior.x) * t;
+      interpolated.y = prior.y + (projectile.y - prior.y) * t;
+      this.interpolatedProjectileOutput[index] = interpolated;
+    }
+
+    this.pruneInterpolatedEntityCaches(current.players.length, current.projectiles.length);
+
+    if (!this.interpolatedSnapshotScratch) {
+      this.interpolatedSnapshotScratch = {
+        ...current,
+        players: this.interpolatedPlayerOutput,
+        projectiles: this.interpolatedProjectileOutput,
+      };
+    }
+
+    const scratch = this.interpolatedSnapshotScratch;
+    scratch.type = current.type;
+    scratch.serverTime = current.serverTime;
+    scratch.world = current.world;
+    scratch.matchId = current.matchId;
+    scratch.matchOver = current.matchOver;
+    scratch.timeRemainingMs = current.timeRemainingMs;
+    scratch.intermissionRemainingMs = current.intermissionRemainingMs;
+    scratch.players = this.interpolatedPlayerOutput;
+    scratch.objects = current.objects;
+    scratch.projectiles = this.interpolatedProjectileOutput;
+    scratch.killFeed = current.killFeed;
+    scratch.scoreboard = current.scoreboard;
+    scratch.you = current.you;
+    scratch.serverNotice = current.serverNotice;
+    return scratch;
   }
 
   sendInput(payload: string) {

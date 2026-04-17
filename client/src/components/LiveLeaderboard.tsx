@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { SnapshotMessage } from "../engine/types";
 
 type LiveLeaderboardProps = {
@@ -5,11 +6,14 @@ type LiveLeaderboardProps = {
 };
 
 export default function LiveLeaderboard({ snapshot }: LiveLeaderboardProps) {
-  const topByMass =
-    snapshot?.players
-      .slice()
-      .sort((a, b) => b.mass - a.mass)
-      .slice(0, 3) ?? [];
+  const topByMass = useMemo(
+    () =>
+      snapshot?.players
+        .slice()
+        .sort((a, b) => b.mass - a.mass)
+        .slice(0, 3) ?? [],
+    [snapshot],
+  );
 
   return (
     <aside className="live-leaderboard">

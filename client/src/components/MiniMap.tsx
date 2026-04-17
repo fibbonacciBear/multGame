@@ -6,9 +6,20 @@ type MiniMapProps = {
   snapshot?: SnapshotMessage;
 };
 
+const MINIMAP_SIZE = 160;
+
 export default function MiniMap({ snapshot }: MiniMapProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const localPlayerId = useGameStore((state) => state.localPlayerId);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    canvas.width = MINIMAP_SIZE;
+    canvas.height = MINIMAP_SIZE;
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -21,19 +32,15 @@ export default function MiniMap({ snapshot }: MiniMapProps) {
       return;
     }
 
-    const size = 160;
-    canvas.width = size;
-    canvas.height = size;
-
-    ctx.clearRect(0, 0, size, size);
+    ctx.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
     ctx.fillStyle = "#05101b";
-    ctx.fillRect(0, 0, size, size);
+    ctx.fillRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
     ctx.strokeStyle = "rgba(255,255,255,0.2)";
-    ctx.strokeRect(1, 1, size - 2, size - 2);
+    ctx.strokeRect(1, 1, MINIMAP_SIZE - 2, MINIMAP_SIZE - 2);
 
     for (const player of snapshot.players) {
-      const x = (player.x / snapshot.world.width) * size;
-      const y = (player.y / snapshot.world.height) * size;
+      const x = (player.x / snapshot.world.width) * MINIMAP_SIZE;
+      const y = (player.y / snapshot.world.height) * MINIMAP_SIZE;
       ctx.beginPath();
       ctx.arc(x, y, player.id === localPlayerId ? 4 : 2.5, 0, Math.PI * 2);
       ctx.fillStyle = player.id === localPlayerId ? "#68e1fd" : player.color;
