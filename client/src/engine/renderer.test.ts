@@ -25,6 +25,8 @@ function createContextStub() {
     clearRect,
     save: vi.fn(),
     translate,
+    rotate: vi.fn(),
+    drawImage: vi.fn(),
     strokeRect: vi.fn(),
     restore: vi.fn(),
     fillText: vi.fn(),

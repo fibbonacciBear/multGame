@@ -1,5 +1,6 @@
 import type { Projectile, SnapshotMessage, WorldObject, WorldPlayer } from "./types";
 import { getRailgunSprites, railgunCullRadius, type RailgunSprite } from "./projectileSprites";
+import testPlayerSpriteUrl from "../assets/sprites/players/test-player.png";
 
 const BASE_HEALTH_BAR_WIDTH = 44;
 const BASELINE_MAX_HEALTH = 100;
@@ -7,6 +8,12 @@ const STARFIELD_SEED = "game-space-v1";
 const AMBIENT_STAR_COLORS = ["#cde4ff", "#b3d4ff", "#adc8ff", "#ffe9c6", "#ffe0bc"];
 const HERO_STAR_COLORS = ["#dbeeff", "#cce5ff", "#d8ecff", "#ffdeb0", "#ffedd3"];
 const MIN_PROJECTILE_HEADING_SPEED = 0.001;
+const PLAYER_SPRITE_SCALE = 2.4;
+const SHOW_HITBOX_DEBUG = import.meta.env.VITE_SHOW_HITBOX_DEBUG === "true";
+
+let playerSpriteImage: HTMLImageElement | undefined;
+let playerSpriteReady = false;
+let playerSpriteFailed = false;
 
 type StarPoint = {
   x: number;
@@ -242,6 +249,64 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: WorldPlayer) {
   ctx.fillRect(x, y, width * ratio, height);
 }
 
+function ensurePlayerSpriteLoaded() {
+  if (playerSpriteReady || playerSpriteFailed || playerSpriteImage) {
+    return;
+  }
+  if (typeof Image === "undefined") {
+    playerSpriteFailed = true;
+    return;
+  }
+  const image = new Image();
+  image.onload = () => {
+    playerSpriteReady = true;
+  };
+  image.onerror = () => {
+    playerSpriteFailed = true;
+  };
+  image.src = testPlayerSpriteUrl;
+  playerSpriteImage = image;
+}
+
+function drawPlayerCircleFallback(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: boolean) {
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+  ctx.fillStyle = isSelf ? "#68e1fd" : player.color;
+  ctx.fill();
+  ctx.lineWidth = isSelf ? 2.5 : 1.5;
+  ctx.strokeStyle = isSelf ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.28)";
+  ctx.stroke();
+}
+
+function drawPlayerSprite(ctx: CanvasRenderingContext2D, player: WorldPlayer) {
+  ensurePlayerSpriteLoaded();
+  const image = playerSpriteImage;
+  if (!playerSpriteReady || !image || !image.complete) {
+    return false;
+  }
+
+  const targetLength = Math.max(player.radius * PLAYER_SPRITE_SCALE, 28);
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const sourceLength = Math.max(sourceWidth, sourceHeight, 1);
+  const scale = targetLength / sourceLength;
+  const targetWidth = sourceWidth * scale;
+  const targetHeight = sourceHeight * scale;
+
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.rotate(player.angle);
+  ctx.drawImage(
+    image,
+    -targetWidth / 2,
+    -targetHeight / 2,
+    targetWidth,
+    targetHeight,
+  );
+  ctx.restore();
+  return true;
+}
+
 function projectileAngle(projectile: Projectile) {
   const speed = Math.hypot(projectile.vx, projectile.vy);
   if (Number.isFinite(speed) && speed > MIN_PROJECTILE_HEADING_SPEED) {
@@ -340,13 +405,18 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: 
   ctx.globalAlpha = 1;
   drawHealthBar(ctx, player);
 
-  ctx.beginPath();
-  ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
-  ctx.fillStyle = isSelf ? "#68e1fd" : player.color;
-  ctx.fill();
-  ctx.lineWidth = isSelf ? 2.5 : 1.5;
-  ctx.strokeStyle = isSelf ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.28)";
-  ctx.stroke();
+  if (!drawPlayerSprite(ctx, player)) {
+    drawPlayerCircleFallback(ctx, player, isSelf);
+  }
+
+  if (SHOW_HITBOX_DEBUG) {
+    // Debug boundary: authoritative server collision radius.
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = isSelf ? "rgba(104, 225, 253, 0.9)" : "rgba(255, 255, 255, 0.65)";
+    ctx.stroke();
+  }
 
   const facingLength = player.radius + 14;
   ctx.beginPath();
