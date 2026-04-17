@@ -256,6 +256,65 @@ func TestRespawnUsesRetentionAndInvulnerability(t *testing.T) {
 	}
 }
 
+func TestUpsertHumanPlayerInitialSpawnUsesProtectionAndFallbackSeparation(t *testing.T) {
+	server := newClassicTestServer()
+	server.cfg.SpawnClearanceAttempts = 0
+	now := time.Now()
+
+	connection := &ClientConnection{PlayerID: "human-1"}
+	player := server.upsertHumanPlayerLocked("human-1", "Pilot", connection, now)
+
+	if !player.SpawnInvulnerableUntil.Equal(now.Add(server.cfg.SpawnInvulnerabilityDuration)) {
+		t.Fatalf("spawn invulnerability expiry = %v, want %v", player.SpawnInvulnerableUntil, now.Add(server.cfg.SpawnInvulnerabilityDuration))
+	}
+	if !player.PendingSpawnSeparation {
+		t.Fatalf("pending spawn separation = false, want true when fallback spawn is used")
+	}
+}
+
+func TestNewBotSpawnUsesProtectionAndFallbackSeparation(t *testing.T) {
+	server := newClassicTestServer()
+	server.cfg.SpawnClearanceAttempts = 0
+	now := time.Now()
+
+	bot := server.newBotLocked(now)
+
+	if !bot.SpawnInvulnerableUntil.Equal(now.Add(server.cfg.SpawnInvulnerabilityDuration)) {
+		t.Fatalf("spawn invulnerability expiry = %v, want %v", bot.SpawnInvulnerableUntil, now.Add(server.cfg.SpawnInvulnerabilityDuration))
+	}
+	if !bot.PendingSpawnSeparation {
+		t.Fatalf("pending spawn separation = false, want true when fallback spawn is used")
+	}
+}
+
+func TestResetMatchSpawnUsesProtectionAndFallbackSeparation(t *testing.T) {
+	server := newClassicTestServer()
+	server.cfg.SpawnClearanceAttempts = 0
+	now := time.Now()
+
+	server.lobby.Players["human-1"] = &Player{
+		ID:        "human-1",
+		Name:      "Pilot",
+		Connected: true,
+		Alive:     true,
+		Mass:      server.cfg.StartingMass,
+		Health:    server.maxHealthForMass(server.cfg.StartingMass),
+	}
+
+	server.resetMatchLocked(now)
+	player := server.lobby.Players["human-1"]
+	if player == nil {
+		t.Fatalf("expected connected player to remain in lobby")
+	}
+
+	if !player.SpawnInvulnerableUntil.Equal(now.Add(server.cfg.SpawnInvulnerabilityDuration)) {
+		t.Fatalf("spawn invulnerability expiry = %v, want %v", player.SpawnInvulnerableUntil, now.Add(server.cfg.SpawnInvulnerabilityDuration))
+	}
+	if !player.PendingSpawnSeparation {
+		t.Fatalf("pending spawn separation = false, want true when fallback spawn is used")
+	}
+}
+
 func TestEvictDisconnectedPlayersLockedAfterGrace(t *testing.T) {
 	server := newClassicTestServer()
 	now := time.Now()

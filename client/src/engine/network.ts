@@ -372,6 +372,9 @@ export class NetworkClient {
         if (!prior) {
           return player;
         }
+        if (prior.isAlive !== player.isAlive) {
+          return player;
+        }
 
         return {
           ...player,

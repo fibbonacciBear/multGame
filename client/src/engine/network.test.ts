@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { normalizeSnapshotProjectiles } from "./network";
-import type { SnapshotMessage } from "./types";
+import { describe, expect, it, vi } from "vitest";
+import { NetworkClient, normalizeSnapshotProjectiles } from "./network";
+import type { MatchJoinResponse, SnapshotMessage } from "./types";
 
 function snapshotWithProjectiles(projectiles: unknown[]): SnapshotMessage {
   return {
@@ -55,5 +55,149 @@ describe("normalizeSnapshotProjectiles", () => {
     });
     expect(Number.isFinite(normalized.projectiles[0].vx)).toBe(true);
     expect(Number.isFinite(normalized.projectiles[0].vy)).toBe(true);
+  });
+});
+
+function snapshotWithPlayers(serverTime: number, players: SnapshotMessage["players"]): SnapshotMessage {
+  return {
+    type: "snapshot",
+    serverTime,
+    world: { width: 4000, height: 4000 },
+    matchId: "match-1",
+    matchOver: false,
+    timeRemainingMs: 1000,
+    intermissionRemainingMs: 0,
+    players,
+    objects: [],
+    projectiles: [],
+    killFeed: [],
+    scoreboard: [],
+  };
+}
+
+function makeClientForInterpolationTests() {
+  const match: MatchJoinResponse = {
+    wsUrl: "ws://localhost/ws/test",
+    lobbyId: "lobby-test",
+    token: "invalid.jwt.token",
+  };
+  return new NetworkClient(match);
+}
+
+describe("NetworkClient.getInterpolatedSnapshot", () => {
+  it("does not interpolate player position across alive-state transitions", () => {
+    const client = makeClientForInterpolationTests() as unknown as {
+      snapshotBuffer: SnapshotMessage[];
+      getInterpolatedSnapshot: () => SnapshotMessage | undefined;
+    };
+    client.snapshotBuffer = [
+      snapshotWithPlayers(1000, [
+        {
+          id: "p1",
+          name: "Pilot",
+          x: 100,
+          y: 120,
+          vx: 0,
+          vy: 0,
+          mass: 10,
+          radius: 10,
+          angle: 0,
+          health: 0,
+          maxHealth: 100,
+          isAlive: false,
+          respawnInMs: 1000,
+          isBot: false,
+          color: "#68e1fd",
+        },
+      ]),
+      snapshotWithPlayers(1100, [
+        {
+          id: "p1",
+          name: "Pilot",
+          x: 3300,
+          y: 3400,
+          vx: 0,
+          vy: 0,
+          mass: 10,
+          radius: 10,
+          angle: 0,
+          health: 100,
+          maxHealth: 100,
+          isAlive: true,
+          respawnInMs: 0,
+          isBot: false,
+          color: "#68e1fd",
+        },
+      ]),
+    ];
+
+    vi.spyOn(Date, "now").mockReturnValue(1150);
+    const interpolated = client.getInterpolatedSnapshot();
+    vi.restoreAllMocks();
+
+    expect(interpolated).toBeDefined();
+    expect(interpolated?.players[0]).toMatchObject({
+      x: 3300,
+      y: 3400,
+      isAlive: true,
+    });
+  });
+
+  it("continues to interpolate while player stays alive", () => {
+    const client = makeClientForInterpolationTests() as unknown as {
+      snapshotBuffer: SnapshotMessage[];
+      getInterpolatedSnapshot: () => SnapshotMessage | undefined;
+    };
+    client.snapshotBuffer = [
+      snapshotWithPlayers(1000, [
+        {
+          id: "p1",
+          name: "Pilot",
+          x: 100,
+          y: 100,
+          vx: 0,
+          vy: 0,
+          mass: 10,
+          radius: 10,
+          angle: 0,
+          health: 100,
+          maxHealth: 100,
+          isAlive: true,
+          respawnInMs: 0,
+          isBot: false,
+          color: "#68e1fd",
+        },
+      ]),
+      snapshotWithPlayers(1100, [
+        {
+          id: "p1",
+          name: "Pilot",
+          x: 200,
+          y: 300,
+          vx: 0,
+          vy: 0,
+          mass: 10,
+          radius: 10,
+          angle: 0,
+          health: 100,
+          maxHealth: 100,
+          isAlive: true,
+          respawnInMs: 0,
+          isBot: false,
+          color: "#68e1fd",
+        },
+      ]),
+    ];
+
+    vi.spyOn(Date, "now").mockReturnValue(1150);
+    const interpolated = client.getInterpolatedSnapshot();
+    vi.restoreAllMocks();
+
+    expect(interpolated).toBeDefined();
+    expect(interpolated?.players[0]).toMatchObject({
+      x: 150,
+      y: 200,
+      isAlive: true,
+    });
   });
 });

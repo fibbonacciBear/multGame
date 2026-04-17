@@ -167,7 +167,8 @@ func (s *Server) newBotLocked(now time.Time) *Player {
 		LastShotAt: now.Add(-s.cfg.ShootCooldown),
 		BotLevel:   s.chooseBotLevelLocked(),
 	}
-	s.spawnPlayerAtRandomPositionLocked(bot)
+	usedFallback := s.spawnPlayerAtRandomPositionLocked(bot)
+	s.applySpawnSafetyLocked(bot, now, usedFallback)
 	return bot
 }
 

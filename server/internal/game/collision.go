@@ -318,10 +318,9 @@ func (s *Server) handleRespawnsLocked(now time.Time) {
 		player.KilledBy = ""
 		player.DeathReason = ""
 		player.RespawnAt = time.Time{}
-		player.SpawnInvulnerableUntil = now.Add(s.cfg.SpawnInvulnerabilityDuration)
 
 		usedFallback := s.spawnPlayerAtRandomPositionLocked(player)
-		player.PendingSpawnSeparation = usedFallback
+		s.applySpawnSafetyLocked(player, now, usedFallback)
 	}
 }
 

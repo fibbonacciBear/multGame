@@ -951,6 +951,8 @@ func (s *Server) closeSocketWithReason(socket *websocket.Conn, code int, reason 
 
 func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConnection, now time.Time) *Player {
 	player, ok := s.lobby.Players[id]
+	spawnedNow := false
+	usedSpawnFallback := false
 	if !ok {
 		if s.activeSlotsLocked() >= s.cfg.MaxPlayers {
 			s.removeOneBotLocked()
@@ -963,7 +965,8 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 		player.Mass = s.cfg.StartingMass
 		player.Health = s.maxHealthForMass(player.Mass)
 		player.Alive = true
-		s.spawnPlayerAtRandomPositionLocked(player)
+		usedSpawnFallback = s.spawnPlayerAtRandomPositionLocked(player)
+		spawnedNow = true
 		s.lobby.Players[player.ID] = player
 	}
 
@@ -980,13 +983,15 @@ func (s *Server) upsertHumanPlayerLocked(id, name string, connection *ClientConn
 		player.Health = s.maxHealthForMass(player.Mass)
 	}
 	if player.X == 0 && player.Y == 0 {
-		s.spawnPlayerAtRandomPositionLocked(player)
+		usedSpawnFallback = s.spawnPlayerAtRandomPositionLocked(player)
+		spawnedNow = true
 	}
 	player.RespawnAt = time.Time{}
 	player.DeathReason = ""
 	player.KilledBy = ""
-	player.SpawnInvulnerableUntil = time.Time{}
-	player.PendingSpawnSeparation = false
+	if spawnedNow {
+		s.applySpawnSafetyLocked(player, now, usedSpawnFallback)
+	}
 	player.LastShotAt = now.Add(-s.cfg.ShootCooldown)
 
 	return player
@@ -1051,6 +1056,11 @@ func (s *Server) spawnProjectileLocked(player *Player, now time.Time) {
 		ExpiresAt: now.Add(s.cfg.ProjectileTTL),
 	}
 	s.lobby.Projectiles = append(s.lobby.Projectiles, shot)
+}
+
+func (s *Server) applySpawnSafetyLocked(player *Player, now time.Time, usedFallback bool) {
+	player.SpawnInvulnerableUntil = now.Add(s.cfg.SpawnInvulnerabilityDuration)
+	player.PendingSpawnSeparation = usedFallback
 }
 
 func (s *Server) clampPlayerToWorldLocked(player *Player) {
@@ -1132,11 +1142,10 @@ func (s *Server) resetMatchLocked(now time.Time) {
 		player.DeathReason = ""
 		player.KilledBy = ""
 		player.PreDeathMass = 0
-		player.SpawnInvulnerableUntil = time.Time{}
-		player.PendingSpawnSeparation = false
 		player.VX = 0
 		player.VY = 0
-		s.spawnPlayerAtRandomPositionLocked(player)
+		usedFallback := s.spawnPlayerAtRandomPositionLocked(player)
+		s.applySpawnSafetyLocked(player, now, usedFallback)
 	}
 }
 
