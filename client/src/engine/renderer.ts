@@ -2,6 +2,7 @@ import type { Projectile, SnapshotMessage, WorldObject, WorldPlayer } from "./ty
 import { getRailgunSprites, railgunCullRadius, type RailgunSprite } from "./projectileSprites";
 import {
   DEFAULT_PLAYER_SPRITE_ID,
+  getAvailablePlayerSpriteIds,
   getPlayerSpriteIdForVariant,
   getPlayerSpriteUrl,
   hasPlayerSpriteId,
@@ -23,6 +24,7 @@ type PlayerSpriteImageState = {
 };
 
 const playerSpriteImageCache = new Map<string, PlayerSpriteImageState>();
+let playerSpriteCachePrimed = false;
 
 type StarPoint = {
   x: number;
@@ -305,6 +307,17 @@ function getOrCreatePlayerSpriteImageState(
   return state;
 }
 
+function primePlayerSpriteCache() {
+  if (playerSpriteCachePrimed) {
+    return;
+  }
+  playerSpriteCachePrimed = true;
+  const spriteIds = getAvailablePlayerSpriteIds();
+  for (const spriteId of spriteIds) {
+    getOrCreatePlayerSpriteImageState(spriteId);
+  }
+}
+
 function drawPlayerCircleFallback(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: boolean) {
   ctx.beginPath();
   ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
@@ -315,11 +328,17 @@ function drawPlayerCircleFallback(ctx: CanvasRenderingContext2D, player: WorldPl
   ctx.stroke();
 }
 
-function drawPlayerSprite(ctx: CanvasRenderingContext2D, player: WorldPlayer) {
+function drawPlayerSprite(
+  ctx: CanvasRenderingContext2D,
+  player: WorldPlayer,
+): "drawn" | "loading" | "failed" {
   const spriteState = getOrCreatePlayerSpriteImageState(player.spriteId, player.spriteVariant);
   const image = spriteState.image;
-  if (!spriteState.ready || spriteState.failed || !image || !image.complete) {
-    return false;
+  if (spriteState.failed || !image) {
+    return "failed";
+  }
+  if (!spriteState.ready || !image.complete) {
+    return "loading";
   }
 
   const targetLength = Math.max(player.radius * PLAYER_SPRITE_SCALE, 28);
@@ -341,7 +360,7 @@ function drawPlayerSprite(ctx: CanvasRenderingContext2D, player: WorldPlayer) {
     targetHeight,
   );
   ctx.restore();
-  return true;
+  return "drawn";
 }
 
 function projectileAngle(projectile: Projectile) {
@@ -442,7 +461,8 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: 
   ctx.globalAlpha = 1;
   drawHealthBar(ctx, player);
 
-  if (!drawPlayerSprite(ctx, player)) {
+  const spriteRenderState = drawPlayerSprite(ctx, player);
+  if (spriteRenderState === "failed") {
     drawPlayerCircleFallback(ctx, player, isSelf);
   }
 
@@ -471,6 +491,8 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: 
   ctx.textAlign = "center";
   ctx.fillText(player.name, player.x, player.y - player.radius - 12);
 }
+
+primePlayerSpriteCache();
 
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
