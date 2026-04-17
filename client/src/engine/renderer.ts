@@ -492,6 +492,11 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: 
   ctx.fillText(player.name, player.x, player.y - player.radius - 12);
 }
 
+function playerCullRadius(player: WorldPlayer) {
+  const spriteHalfLength = Math.max(player.radius * PLAYER_SPRITE_SCALE, 28) / 2;
+  return Math.max(player.radius, spriteHalfLength);
+}
+
 primePlayerSpriteCache();
 
 export function renderWorld(
@@ -528,7 +533,24 @@ export function renderWorld(
 
   snapshot.players
     .filter((player) => player.isAlive)
-    .forEach((player) => drawPlayer(ctx, player, player.id === localPlayerId));
+    .forEach((player) => {
+      if (
+        !isWithinViewport(
+          player.x,
+          player.y,
+          playerCullRadius(player),
+          camX,
+          camY,
+          width,
+          height,
+          64,
+        )
+      ) {
+        return;
+      }
+
+      drawPlayer(ctx, player, player.id === localPlayerId);
+    });
 
   ctx.restore();
   ctx.globalAlpha = 1;
