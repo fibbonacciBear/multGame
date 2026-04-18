@@ -55,7 +55,12 @@ export function startGameEngine(
 
     const snapshot = network.getInterpolatedSnapshot();
     if (snapshot) {
-      renderWorld(ctx, snapshot, useGameStore.getState().localPlayerId);
+      renderWorld(
+        ctx,
+        snapshot,
+        useGameStore.getState().localPlayerId,
+        network.getLatestSnapshot(),
+      );
     }
 
     animationFrame = window.requestAnimationFrame(tick);

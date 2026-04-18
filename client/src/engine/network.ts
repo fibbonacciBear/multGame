@@ -10,6 +10,7 @@ import type {
 type SnapshotListener = (snapshot: SnapshotMessage) => void;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const MAX_SNAPSHOT_BUFFER_SIZE = 20;
+const SNAPSHOT_STALE_TIMEOUT_MS = 1500;
 const DEFAULT_PROJECTILE_TYPE = "railgun";
 const DEFAULT_PROJECTILE_COLOR = "#68e1fd";
 const MIN_HEADING_SPEED = 0.001;
@@ -157,6 +158,8 @@ export class NetworkClient {
   private readonly interpolatedPlayerOutput: WorldPlayer[] = [];
   private readonly interpolatedProjectileOutput: Projectile[] = [];
   private interpolatedSnapshotScratch?: SnapshotMessage;
+  private lastSnapshotReceivedAtMs = 0;
+  private staleSnapshotRecoveryTriggered = false;
   private disposed = false;
   private reconnectTimer?: number;
   private reconnectAttempts = 0;
@@ -186,6 +189,8 @@ export class NetworkClient {
 
     const socket = new WebSocket(this.match.wsUrl);
     this.socket = socket;
+    this.staleSnapshotRecoveryTriggered = false;
+    this.lastSnapshotReceivedAtMs = 0;
 
     socket.addEventListener("open", () => {
       if (this.socket !== socket || this.disposed) {
@@ -223,6 +228,8 @@ export class NetworkClient {
         if (!message.players) message.players = [];
         if (!message.projectiles) message.projectiles = [];
         if (!message.objects) message.objects = [];
+        this.lastSnapshotReceivedAtMs = Date.now();
+        this.staleSnapshotRecoveryTriggered = false;
 
         const normalizedMessage = normalizeSnapshotProjectiles(
           message,
@@ -272,6 +279,8 @@ export class NetworkClient {
     }
 
     this.socket = undefined;
+    this.lastSnapshotReceivedAtMs = 0;
+    this.staleSnapshotRecoveryTriggered = false;
     if (this.shouldRematch()) {
       const refreshed = await this.tryRefreshMatch();
       if (refreshed) {
@@ -335,12 +344,23 @@ export class NetworkClient {
     }
 
     this.socket = undefined;
+    this.lastSnapshotReceivedAtMs = 0;
+    this.staleSnapshotRecoveryTriggered = false;
     useGameStore.getState().setConnectionStatus("error", message);
   }
 
   onSnapshot(listener: SnapshotListener) {
     this.snapshotListeners.add(listener);
     return () => this.snapshotListeners.delete(listener);
+  }
+
+  getLatestSnapshot() {
+    // Exposes the latest authoritative snapshot for readonly consumers (e.g. effect syncing).
+    // Callers must not mutate this object.
+    if (this.snapshotBuffer.length === 0) {
+      return undefined;
+    }
+    return this.snapshotBuffer[this.snapshotBuffer.length - 1];
   }
 
   private pruneInterpolatedEntityCaches(playerCount: number, projectileCount: number) {
@@ -365,7 +385,34 @@ export class NetworkClient {
     }
   }
 
+  private recoverFromStaleSnapshotStream() {
+    if (this.disposed || !this.socket) {
+      return;
+    }
+    if (this.socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (this.lastSnapshotReceivedAtMs === 0) {
+      return;
+    }
+    if (Date.now() - this.lastSnapshotReceivedAtMs <= SNAPSHOT_STALE_TIMEOUT_MS) {
+      return;
+    }
+    if (this.staleSnapshotRecoveryTriggered) {
+      return;
+    }
+
+    this.staleSnapshotRecoveryTriggered = true;
+    this.snapshotBuffer = [];
+    this.interpolatedSnapshotScratch = undefined;
+    useGameStore
+      .getState()
+      .setConnectionStatus("connecting", "Snapshot stream stalled, reconnecting...");
+    this.socket.close();
+  }
+
   getInterpolatedSnapshot() {
+    this.recoverFromStaleSnapshotStream();
     if (this.snapshotBuffer.length === 0) {
       return undefined;
     }

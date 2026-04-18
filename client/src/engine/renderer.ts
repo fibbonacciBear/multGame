@@ -56,12 +56,116 @@ type ProjectileRenderData = {
   core: RailgunSprite;
 };
 
+type TrackedProjectile = {
+  x: number;
+  y: number;
+  color: string;
+  radius: number;
+};
+
+type ImpactEffect = {
+  active: boolean;
+  x: number;
+  y: number;
+  color: string;
+  colorRgb: string;
+  radius: number;
+  createdAtMs: number;
+  ttlMs: number;
+  seed: number;
+};
+
+type ExplosionEffect = {
+  active: boolean;
+  x: number;
+  y: number;
+  color: string;
+  colorRgb: string;
+  radius: number;
+  createdAtMs: number;
+  ttlMs: number;
+  seed: number;
+};
+
+type ExhaustNozzle = {
+  x: number;
+  y: number;
+  scale: number;
+};
+
+const DEFAULT_EXHAUST_NOZZLES: ExhaustNozzle[] = [
+  { x: -0.34, y: -0.12, scale: 1 },
+  { x: -0.34, y: 0.12, scale: 1 },
+];
+
+const EXHAUST_NOZZLES_BY_SPRITE: Record<string, ExhaustNozzle[]> = {
+  "test-player": [
+    { x: -0.38, y: -0.16, scale: 1.04 },
+    { x: -0.38, y: 0.16, scale: 1.04 },
+  ],
+  blue_no_bg: [{ x: -0.42, y: 0, scale: 1.12 }],
+  purple_sprite: [{ x: -0.42, y: 0, scale: 1.12 }],
+};
+
+const EXHAUST_MIN_SPEED = 24;
+const EXHAUST_MAX_SPEED = 620;
+const EXHAUST_SIZE_BOOST = 1.85;
+const MAX_IMPACT_EFFECTS = 120;
+const MAX_EXPLOSION_EFFECTS = 20;
+const EXPLOSION_HEAVY_LOAD_THRESHOLD = 6;
+const FIRE_RING_RGB = "255, 179, 110";
+const SHOCK_RING_RGB = "231, 246, 255";
+const EFFECT_TRACKING_RESET_GAP_MS = 1200;
+const IMPACT_SYNC_VIEWPORT_MARGIN = 320;
+
 let screenStarfieldCache: ScreenStarfield | undefined;
 let backgroundLayerCache: CachedBackgroundLayers | undefined;
 const projectileHeadingCache = new Map<string, number>();
 const objectMassColorCache = new Map<number, string>();
+const playerExhaustPhaseCache = new Map<string, number>();
+const colorRgbCache = new Map<string, string>();
 let lastProjectileMatchId = "";
+let lastEffectsMatchId = "";
+let lastEffectsSyncedServerTime = 0;
 const projectileRenderablesScratch: ProjectileRenderData[] = [];
+const trackedProjectiles = new Map<string, TrackedProjectile>();
+const trackedPlayerAlive = new Map<string, boolean>();
+const currentProjectileIdsScratch = new Set<string>();
+const currentPlayerIdsScratch = new Set<string>();
+const activeImpactEffectIndices: number[] = [];
+const activeExplosionEffectIndices: number[] = [];
+const impactActiveListIndexBySlot: number[] = Array.from(
+  { length: MAX_IMPACT_EFFECTS },
+  () => -1,
+);
+const explosionActiveListIndexBySlot: number[] = Array.from(
+  { length: MAX_EXPLOSION_EFFECTS },
+  () => -1,
+);
+const impactEffects: ImpactEffect[] = Array.from({ length: MAX_IMPACT_EFFECTS }, () => ({
+  active: false,
+  x: 0,
+  y: 0,
+  color: "#8fe3ff",
+  colorRgb: "143, 227, 255",
+  radius: 1,
+  createdAtMs: 0,
+  ttlMs: 0,
+  seed: 0,
+}));
+const explosionEffects: ExplosionEffect[] = Array.from({ length: MAX_EXPLOSION_EFFECTS }, () => ({
+  active: false,
+  x: 0,
+  y: 0,
+  color: "#9fd6ff",
+  colorRgb: "159, 214, 255",
+  radius: 1,
+  createdAtMs: 0,
+  ttlMs: 0,
+  seed: 0,
+}));
+let nextImpactEffectIndex = 0;
+let nextExplosionEffectIndex = 0;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -379,6 +483,53 @@ function objectMassColor(mass: number) {
   return color;
 }
 
+function rgbTripletForColor(color: string) {
+  const normalized = color.trim().toLowerCase();
+  const cached = colorRgbCache.get(normalized);
+  if (cached) {
+    return cached;
+  }
+
+  const shortHex = /^#([0-9a-f]{3})$/.exec(normalized);
+  if (shortHex) {
+    const value = shortHex[1];
+    const rgb = `${parseInt(value[0] + value[0], 16)}, ${parseInt(value[1] + value[1], 16)}, ${parseInt(
+      value[2] + value[2],
+      16,
+    )}`;
+    colorRgbCache.set(normalized, rgb);
+    return rgb;
+  }
+
+  const longHex = /^#([0-9a-f]{6})$/.exec(normalized);
+  if (longHex) {
+    const value = longHex[1];
+    const rgb = `${parseInt(value.slice(0, 2), 16)}, ${parseInt(value.slice(2, 4), 16)}, ${parseInt(
+      value.slice(4, 6),
+      16,
+    )}`;
+    colorRgbCache.set(normalized, rgb);
+    return rgb;
+  }
+
+  const rgbMatch = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*[\d.]+)?\s*\)$/i.exec(
+    normalized,
+  );
+  if (rgbMatch) {
+    const rgb = `${rgbMatch[1]}, ${rgbMatch[2]}, ${rgbMatch[3]}`;
+    colorRgbCache.set(normalized, rgb);
+    return rgb;
+  }
+
+  const fallback = "143, 227, 255";
+  colorRgbCache.set(normalized, fallback);
+  return fallback;
+}
+
+function rgbaFromTriplet(rgbTriplet: string, alpha: number) {
+  return `rgba(${rgbTriplet}, ${clamp(alpha, 0, 1)})`;
+}
+
 function drawObjects(ctx: CanvasRenderingContext2D, objects: WorldObject[], camX: number, camY: number, width: number, height: number) {
   for (const object of objects) {
     if (
@@ -423,11 +574,7 @@ function resolvePlayerSpriteId(spriteId?: string, spriteVariant?: number): strin
   return DEFAULT_PLAYER_SPRITE_ID;
 }
 
-function getOrCreatePlayerSpriteImageState(
-  spriteId?: string,
-  spriteVariant?: number,
-): PlayerSpriteImageState {
-  const resolvedSpriteId = resolvePlayerSpriteId(spriteId, spriteVariant);
+function getOrCreatePlayerSpriteImageState(resolvedSpriteId: string): PlayerSpriteImageState {
   const cached = playerSpriteImageCache.get(resolvedSpriteId);
   if (cached) {
     return cached;
@@ -458,6 +605,94 @@ function getOrCreatePlayerSpriteImageState(
   return state;
 }
 
+function getPlayerExhaustPhase(playerId: string) {
+  const cached = playerExhaustPhaseCache.get(playerId);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const phase = (hashSeed(playerId) / 0xffffffff) * Math.PI * 2;
+  playerExhaustPhaseCache.set(playerId, phase);
+  return phase;
+}
+
+function getExhaustNozzles(spriteId: string) {
+  return EXHAUST_NOZZLES_BY_SPRITE[spriteId] ?? DEFAULT_EXHAUST_NOZZLES;
+}
+
+function drawPlayerExhaust(
+  ctx: CanvasRenderingContext2D,
+  player: WorldPlayer,
+  spriteId: string,
+  targetWidth: number,
+  targetHeight: number,
+  isSelf: boolean,
+) {
+  const speed = Math.hypot(player.vx, player.vy);
+  const throttle = clamp((speed - EXHAUST_MIN_SPEED) / (EXHAUST_MAX_SPEED - EXHAUST_MIN_SPEED), 0, 1);
+  if (throttle <= 0.03) {
+    return;
+  }
+  const baseIntensity = 0.2 + throttle * 0.9;
+  const nowSeconds = (typeof performance === "undefined" ? Date.now() : performance.now()) / 1000;
+  const phase = getPlayerExhaustPhase(player.id);
+  const flicker =
+    0.88 + Math.sin(nowSeconds * 24 + phase) * 0.12 + Math.sin(nowSeconds * 41 + phase * 1.7) * 0.05;
+  const intensity = clamp(baseIntensity * flicker, 0.2, 1.25);
+  const nozzles = getExhaustNozzles(spriteId);
+
+  ctx.globalCompositeOperation = "lighter";
+  for (let index = 0; index < nozzles.length; index += 1) {
+    const nozzle = nozzles[index];
+    const nozzleX = nozzle.x * targetWidth;
+    const nozzleY = nozzle.y * targetHeight;
+    const nozzleScale = nozzle.scale;
+    const pulse =
+      1 +
+      Math.sin(nowSeconds * (16 + index * 2) + phase * (1 + index * 0.23)) * 0.08;
+
+    const plumeLength =
+      targetWidth * (0.19 + intensity * 0.3) * nozzleScale * pulse * EXHAUST_SIZE_BOOST;
+    const wakeWidth =
+      targetHeight * (0.035 + intensity * 0.032) * nozzleScale * EXHAUST_SIZE_BOOST;
+    const coreWidth = wakeWidth * 0.45;
+    const hue = isSelf ? "145, 244, 255" : "127, 219, 255";
+
+    const wakeGradient = ctx.createLinearGradient(nozzleX, nozzleY, nozzleX - plumeLength, nozzleY);
+    wakeGradient.addColorStop(0, `rgba(${hue}, ${0.55 + intensity * 0.25})`);
+    wakeGradient.addColorStop(0.5, `rgba(${hue}, ${0.3 + intensity * 0.15})`);
+    wakeGradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.strokeStyle = wakeGradient;
+    ctx.lineCap = "round";
+    ctx.lineWidth = wakeWidth;
+    ctx.beginPath();
+    ctx.moveTo(nozzleX, nozzleY);
+    ctx.lineTo(nozzleX - plumeLength, nozzleY);
+    ctx.stroke();
+
+    const coreGradient = ctx.createLinearGradient(nozzleX, nozzleY, nozzleX - plumeLength * 0.74, nozzleY);
+    coreGradient.addColorStop(0, "rgba(245, 255, 255, 0.98)");
+    coreGradient.addColorStop(0.55, "rgba(168, 242, 255, 0.62)");
+    coreGradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.strokeStyle = coreGradient;
+    ctx.lineWidth = coreWidth;
+    ctx.beginPath();
+    ctx.moveTo(nozzleX, nozzleY);
+    ctx.lineTo(nozzleX - plumeLength * 0.74, nozzleY);
+    ctx.stroke();
+
+    const haloRadius = wakeWidth * (1.2 + intensity * 0.7) * 1.15;
+    const halo = ctx.createRadialGradient(nozzleX, nozzleY, 0, nozzleX, nozzleY, haloRadius);
+    halo.addColorStop(0, "rgba(250, 255, 255, 0.9)");
+    halo.addColorStop(0.55, "rgba(130, 220, 255, 0.48)");
+    halo.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(nozzleX, nozzleY, haloRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = "source-over";
+}
+
 function drawPlayerCircleFallback(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: boolean) {
   ctx.beginPath();
   ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
@@ -471,8 +706,10 @@ function drawPlayerCircleFallback(ctx: CanvasRenderingContext2D, player: WorldPl
 function drawPlayerSprite(
   ctx: CanvasRenderingContext2D,
   player: WorldPlayer,
+  isSelf: boolean,
 ): "drawn" | "loading" | "failed" {
-  const spriteState = getOrCreatePlayerSpriteImageState(player.spriteId, player.spriteVariant);
+  const resolvedSpriteId = resolvePlayerSpriteId(player.spriteId, player.spriteVariant);
+  const spriteState = getOrCreatePlayerSpriteImageState(resolvedSpriteId);
   const image = spriteState.image;
   if (spriteState.failed || !image) {
     return "failed";
@@ -492,6 +729,7 @@ function drawPlayerSprite(
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.rotate(player.angle);
+  drawPlayerExhaust(ctx, player, resolvedSpriteId, targetWidth, targetHeight, isSelf);
   ctx.drawImage(
     image,
     -targetWidth / 2,
@@ -531,6 +769,359 @@ function pruneProjectileAngleCache(projectiles: Projectile[], matchId: string) {
       projectileHeadingCache.delete(id);
     }
   }
+}
+
+function clearAllEffects() {
+  playerExhaustPhaseCache.clear();
+  trackedProjectiles.clear();
+  trackedPlayerAlive.clear();
+  currentProjectileIdsScratch.clear();
+  currentPlayerIdsScratch.clear();
+  activeImpactEffectIndices.length = 0;
+  activeExplosionEffectIndices.length = 0;
+  impactActiveListIndexBySlot.fill(-1);
+  explosionActiveListIndexBySlot.fill(-1);
+  for (let index = 0; index < impactEffects.length; index += 1) {
+    impactEffects[index].active = false;
+  }
+  for (let index = 0; index < explosionEffects.length; index += 1) {
+    explosionEffects[index].active = false;
+  }
+  nextImpactEffectIndex = 0;
+  nextExplosionEffectIndex = 0;
+  lastEffectsSyncedServerTime = 0;
+}
+
+function clearEffectTrackingState() {
+  trackedProjectiles.clear();
+  trackedPlayerAlive.clear();
+  currentProjectileIdsScratch.clear();
+  currentPlayerIdsScratch.clear();
+}
+
+function removeActiveIndex(list: number[], indexBySlot: number[], indexInList: number) {
+  const lastIndex = list.length - 1;
+  if (indexInList < 0 || indexInList > lastIndex) {
+    return;
+  }
+  const removedSlot = list[indexInList];
+  indexBySlot[removedSlot] = -1;
+  if (indexInList === lastIndex) {
+    list.pop();
+    return;
+  }
+  const movedSlot = list[lastIndex];
+  list[indexInList] = movedSlot;
+  indexBySlot[movedSlot] = indexInList;
+  list.pop();
+}
+
+function nextImpactEffectSlot() {
+  const slotIndex = nextImpactEffectIndex;
+  const slot = impactEffects[slotIndex];
+  nextImpactEffectIndex = (nextImpactEffectIndex + 1) % impactEffects.length;
+  return { slotIndex, slot };
+}
+
+function nextExplosionEffectSlot() {
+  const slotIndex = nextExplosionEffectIndex;
+  const slot = explosionEffects[slotIndex];
+  nextExplosionEffectIndex = (nextExplosionEffectIndex + 1) % explosionEffects.length;
+  return { slotIndex, slot };
+}
+
+function spawnImpactEffect(
+  x: number,
+  y: number,
+  color: string,
+  radius: number,
+  nowMs: number,
+  seedSource: string,
+) {
+  const { slotIndex, slot: effect } = nextImpactEffectSlot();
+  if (impactActiveListIndexBySlot[slotIndex] === -1) {
+    impactActiveListIndexBySlot[slotIndex] = activeImpactEffectIndices.length;
+    activeImpactEffectIndices.push(slotIndex);
+  }
+  effect.active = true;
+  effect.x = x;
+  effect.y = y;
+  effect.color = color;
+  effect.colorRgb = rgbTripletForColor(color);
+  effect.radius = radius;
+  effect.createdAtMs = nowMs;
+  effect.ttlMs = 180;
+  effect.seed = hashSeed(seedSource) / 0xffffffff;
+}
+
+function spawnExplosionEffect(
+  x: number,
+  y: number,
+  color: string,
+  radius: number,
+  nowMs: number,
+  seedSource: string,
+) {
+  const { slotIndex, slot: effect } = nextExplosionEffectSlot();
+  if (explosionActiveListIndexBySlot[slotIndex] === -1) {
+    explosionActiveListIndexBySlot[slotIndex] = activeExplosionEffectIndices.length;
+    activeExplosionEffectIndices.push(slotIndex);
+  }
+  effect.active = true;
+  effect.x = x;
+  effect.y = y;
+  effect.color = color;
+  effect.colorRgb = rgbTripletForColor(color);
+  effect.radius = radius;
+  effect.createdAtMs = nowMs;
+  effect.ttlMs = 620;
+  effect.seed = hashSeed(seedSource) / 0xffffffff;
+}
+
+function syncCombatEffects(
+  snapshot: SnapshotMessage,
+  nowMs: number,
+  camX: number,
+  camY: number,
+  width: number,
+  height: number,
+) {
+  if (lastEffectsMatchId !== snapshot.matchId) {
+    clearAllEffects();
+    lastEffectsMatchId = snapshot.matchId;
+  }
+  if (lastEffectsSyncedServerTime > 0) {
+    const serverTimeGap = snapshot.serverTime - lastEffectsSyncedServerTime;
+    if (serverTimeGap < 0 || serverTimeGap > EFFECT_TRACKING_RESET_GAP_MS) {
+      clearEffectTrackingState();
+    }
+  }
+
+  currentProjectileIdsScratch.clear();
+  for (let index = 0; index < snapshot.projectiles.length; index += 1) {
+    const projectile = snapshot.projectiles[index];
+    currentProjectileIdsScratch.add(projectile.id);
+    const tracked = trackedProjectiles.get(projectile.id);
+    if (tracked) {
+      tracked.x = projectile.x;
+      tracked.y = projectile.y;
+      tracked.color = projectile.color;
+      tracked.radius = projectile.radius;
+      continue;
+    }
+    trackedProjectiles.set(projectile.id, {
+      x: projectile.x,
+      y: projectile.y,
+      color: projectile.color,
+      radius: projectile.radius,
+    });
+  }
+
+  for (const [projectileId, tracked] of trackedProjectiles) {
+    if (currentProjectileIdsScratch.has(projectileId)) {
+      continue;
+    }
+    const impactCullRadius = Math.max(tracked.radius * 3.2, 8);
+    if (
+      isWithinViewport(
+        tracked.x,
+        tracked.y,
+        impactCullRadius,
+        camX,
+        camY,
+        width,
+        height,
+        IMPACT_SYNC_VIEWPORT_MARGIN,
+      )
+    ) {
+      spawnImpactEffect(
+        tracked.x,
+        tracked.y,
+        tracked.color,
+        tracked.radius,
+        nowMs,
+        `${snapshot.matchId}|impact|${projectileId}`,
+      );
+    }
+    trackedProjectiles.delete(projectileId);
+  }
+
+  currentPlayerIdsScratch.clear();
+  for (let index = 0; index < snapshot.players.length; index += 1) {
+    const player = snapshot.players[index];
+    currentPlayerIdsScratch.add(player.id);
+    const wasAlive = trackedPlayerAlive.get(player.id);
+    if (wasAlive === true && !player.isAlive) {
+      spawnExplosionEffect(
+        player.x,
+        player.y,
+        player.color,
+        player.radius,
+        nowMs,
+        `${snapshot.matchId}|explosion|${player.id}|${nowMs}`,
+      );
+    }
+    trackedPlayerAlive.set(player.id, player.isAlive);
+  }
+
+  for (const playerId of trackedPlayerAlive.keys()) {
+    if (!currentPlayerIdsScratch.has(playerId)) {
+      trackedPlayerAlive.delete(playerId);
+    }
+  }
+  lastEffectsSyncedServerTime = snapshot.serverTime;
+}
+
+function drawImpactEffects(
+  ctx: CanvasRenderingContext2D,
+  nowMs: number,
+  camX: number,
+  camY: number,
+  width: number,
+  height: number,
+) {
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let activeIndex = activeImpactEffectIndices.length - 1; activeIndex >= 0; activeIndex -= 1) {
+    const effectIndex = activeImpactEffectIndices[activeIndex];
+    const effect = impactEffects[effectIndex];
+    if (!effect.active) {
+      removeActiveIndex(activeImpactEffectIndices, impactActiveListIndexBySlot, activeIndex);
+      continue;
+    }
+    const age = nowMs - effect.createdAtMs;
+    if (age >= effect.ttlMs) {
+      effect.active = false;
+      removeActiveIndex(activeImpactEffectIndices, impactActiveListIndexBySlot, activeIndex);
+      continue;
+    }
+    const progress = age / effect.ttlMs;
+    const fade = 1 - progress;
+    const flashRadius = Math.max(effect.radius * 3.2, 8) * (0.6 + progress * 0.8);
+    if (!isWithinViewport(effect.x, effect.y, flashRadius, camX, camY, width, height, 48)) {
+      continue;
+    }
+
+    ctx.fillStyle = rgbaFromTriplet(effect.colorRgb, 0.24 * fade);
+    ctx.beginPath();
+    ctx.arc(effect.x, effect.y, flashRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    const ringRadius = flashRadius * (1.1 + progress * 0.9);
+    ctx.strokeStyle = rgbaFromTriplet(effect.colorRgb, 0.56 * fade);
+    ctx.lineWidth = 1.2 + fade * 1.4;
+    ctx.beginPath();
+    ctx.arc(effect.x, effect.y, ringRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const sparkCount = 3;
+    for (let sparkIndex = 0; sparkIndex < sparkCount; sparkIndex += 1) {
+      const angle = effect.seed * Math.PI * 2 + sparkIndex * ((Math.PI * 2) / sparkCount) + progress * 6;
+      const sparkLength = flashRadius * (0.55 + fade * 0.5);
+      ctx.strokeStyle = rgbaFromTriplet(effect.colorRgb, 0.7 * fade);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(effect.x, effect.y);
+      ctx.lineTo(effect.x + Math.cos(angle) * sparkLength, effect.y + Math.sin(angle) * sparkLength);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawExplosionEffects(
+  ctx: CanvasRenderingContext2D,
+  nowMs: number,
+  camX: number,
+  camY: number,
+  width: number,
+  height: number,
+) {
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  const heavyLoadMode = activeExplosionEffectIndices.length > EXPLOSION_HEAVY_LOAD_THRESHOLD;
+  for (let activeIndex = activeExplosionEffectIndices.length - 1; activeIndex >= 0; activeIndex -= 1) {
+    const effectIndex = activeExplosionEffectIndices[activeIndex];
+    const effect = explosionEffects[effectIndex];
+    if (!effect.active) {
+      removeActiveIndex(activeExplosionEffectIndices, explosionActiveListIndexBySlot, activeIndex);
+      continue;
+    }
+    const age = nowMs - effect.createdAtMs;
+    if (age >= effect.ttlMs) {
+      effect.active = false;
+      removeActiveIndex(activeExplosionEffectIndices, explosionActiveListIndexBySlot, activeIndex);
+      continue;
+    }
+    const progress = age / effect.ttlMs;
+    const fade = 1 - progress;
+    const blastRadius = Math.max(effect.radius * 2.8, 28) * (0.58 + progress * 1.72);
+    if (!isWithinViewport(effect.x, effect.y, blastRadius, camX, camY, width, height, 64)) {
+      continue;
+    }
+
+    // Fireball core and bloom.
+    const fireballRadius = blastRadius * (0.72 + fade * 0.3);
+    if (heavyLoadMode) {
+      ctx.fillStyle = rgbaFromTriplet(effect.colorRgb, 0.42 * fade);
+    } else {
+      const fireball = ctx.createRadialGradient(effect.x, effect.y, 0, effect.x, effect.y, fireballRadius);
+      fireball.addColorStop(0, `rgba(255, 251, 235, ${0.82 * fade + 0.12})`);
+      fireball.addColorStop(0.32, `rgba(255, 193, 123, ${0.72 * fade})`);
+      fireball.addColorStop(0.66, `rgba(255, 112, 68, ${0.46 * fade})`);
+      fireball.addColorStop(0.84, rgbaFromTriplet(effect.colorRgb, 0.28 * fade));
+      fireball.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = fireball;
+    }
+    ctx.beginPath();
+    ctx.arc(effect.x, effect.y, fireballRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hot ring around the fireball.
+    ctx.strokeStyle = rgbaFromTriplet(FIRE_RING_RGB, 0.64 * fade);
+    ctx.lineWidth = 1.4 + fade * 2.8;
+    ctx.beginPath();
+    ctx.arc(effect.x, effect.y, blastRadius * (0.84 + progress * 0.2), 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Debris scatter streaks.
+    const debrisCount = heavyLoadMode ? 4 : 8;
+    for (let debrisIndex = 0; debrisIndex < debrisCount; debrisIndex += 1) {
+      const baseAngle = effect.seed * Math.PI * 2 + debrisIndex * ((Math.PI * 2) / debrisCount);
+      const wobble = Math.sin(progress * 9 + debrisIndex * 1.7 + effect.seed * 10) * 0.18;
+      const angle = baseAngle + wobble;
+      const travel = blastRadius * (0.35 + progress * 1.55);
+      const shardX = effect.x + Math.cos(angle) * travel;
+      const shardY = effect.y + Math.sin(angle) * travel;
+      const shardLength = blastRadius * (0.13 + fade * 0.1);
+      const shardWidth = 0.9 + fade * 1.9;
+
+      ctx.strokeStyle = rgbaFromTriplet(effect.colorRgb, 0.62 * fade);
+      ctx.lineWidth = shardWidth;
+      ctx.beginPath();
+      ctx.moveTo(shardX, shardY);
+      ctx.lineTo(
+        shardX - Math.cos(angle) * shardLength,
+        shardY - Math.sin(angle) * shardLength,
+      );
+      ctx.stroke();
+
+      const emberRadius = shardWidth * 0.6;
+      ctx.fillStyle = rgbaFromTriplet(effect.colorRgb, 0.48 * fade);
+      ctx.beginPath();
+      ctx.arc(shardX, shardY, emberRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Expanding shock ring that fades out.
+    const shockRadius = blastRadius * (1.18 + progress * 0.62);
+    ctx.strokeStyle = rgbaFromTriplet(SHOCK_RING_RGB, 0.38 * fade);
+    ctx.lineWidth = 0.8 + fade * 1.7;
+    ctx.beginPath();
+    ctx.arc(effect.x, effect.y, shockRadius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawProjectileSprite(ctx: CanvasRenderingContext2D, data: ProjectileRenderData, sprite: RailgunSprite) {
@@ -613,7 +1204,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldPlayer, isSelf: 
   ctx.globalAlpha = 1;
   drawHealthBar(ctx, player);
 
-  const spriteRenderState = drawPlayerSprite(ctx, player);
+  const spriteRenderState = drawPlayerSprite(ctx, player, isSelf);
   if (spriteRenderState !== "drawn") {
     drawPlayerCircleFallback(ctx, player, isSelf);
   }
@@ -653,6 +1244,7 @@ export function renderWorld(
   ctx: CanvasRenderingContext2D,
   snapshot: SnapshotMessage,
   localPlayerId?: string,
+  effectsSnapshot?: SnapshotMessage,
 ) {
   const width = ctx.canvas.clientWidth || ctx.canvas.width;
   const height = ctx.canvas.clientHeight || ctx.canvas.height;
@@ -666,6 +1258,17 @@ export function renderWorld(
 
   const camX = selfPlayer.x - width / 2;
   const camY = selfPlayer.y - height / 2;
+  const nowMs = typeof performance === "undefined" ? Date.now() : performance.now();
+  const effectSource = effectsSnapshot ?? snapshot;
+  const effectCameraPlayer =
+    effectSource.players.find((player) => player.id === localPlayerId) ??
+    effectSource.players[0] ??
+    selfPlayer;
+  const effectCamX = effectCameraPlayer.x - width / 2;
+  const effectCamY = effectCameraPlayer.y - height / 2;
+  if (effectSource.serverTime !== lastEffectsSyncedServerTime) {
+    syncCombatEffects(effectSource, nowMs, effectCamX, effectCamY, width, height);
+  }
 
   ctx.clearRect(0, 0, width, height);
   drawSpaceBackground(ctx, width, height, camX, camY);
@@ -680,6 +1283,8 @@ export function renderWorld(
   drawObjects(ctx, snapshot.objects, camX, camY, width, height);
 
   drawProjectiles(ctx, snapshot.projectiles, snapshot.matchId, camX, camY, width, height);
+  drawImpactEffects(ctx, nowMs, camX, camY, width, height);
+  drawExplosionEffects(ctx, nowMs, camX, camY, width, height);
 
   for (let index = 0; index < snapshot.players.length; index += 1) {
     const player = snapshot.players[index];
