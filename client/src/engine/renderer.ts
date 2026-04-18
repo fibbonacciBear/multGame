@@ -22,6 +22,11 @@ const DEBRIS_EDGE_STROKE = "rgba(232, 240, 255, 0.2)";
 const DEBRIS_HIGHLIGHT_FILL = "rgba(239, 245, 255, 0.24)";
 const SALVAGE_CORE_SPRITE_BASE_RADIUS = 12;
 const SALVAGE_CORE_SPRITE_LOGICAL_SIZE = SALVAGE_CORE_SPRITE_BASE_RADIUS * 4;
+const PERIMETER_OUTER_FIELD_DEPTH = 34;
+const PERIMETER_INNER_RAIL_DEPTH = 24;
+const PERIMETER_MODULE_SPACING = 128;
+const PERIMETER_CORNER_ANCHOR_SIZE = 56;
+const PERIMETER_VIEW_MARGIN = 96;
 
 type PlayerSpriteImageState = {
   image?: HTMLImageElement;
@@ -31,6 +36,9 @@ type PlayerSpriteImageState = {
 
 const playerSpriteImageCache = new Map<string, PlayerSpriteImageState>();
 const salvageCoreSpriteCache = new Map<string, SalvageCoreSprite>();
+const horizontalPerimeterModuleSpriteCache = new Map<string, CachedPerimeterSprite>();
+const verticalPerimeterModuleSpriteCache = new Map<string, CachedPerimeterSprite>();
+const perimeterCornerSpriteCache = new Map<string, CachedPerimeterSprite>();
 
 type StarPoint = {
   x: number;
@@ -59,6 +67,12 @@ type CachedBackgroundLayers = {
 type SalvageCoreSprite = {
   canvas: HTMLCanvasElement;
   logicalSize: number;
+};
+
+type CachedPerimeterSprite = {
+  canvas: HTMLCanvasElement;
+  logicalWidth: number;
+  logicalHeight: number;
 };
 
 type ProjectileRenderData = {
@@ -354,6 +368,10 @@ function salvageCoreSpriteCacheKey(accentColor: string, dpr: number) {
   return `${accentColor}|${normalizeDpr(dpr)}`;
 }
 
+function perimeterSpriteCacheKey(kind: string, dpr: number) {
+  return `${kind}|${normalizeDpr(dpr)}`;
+}
+
 function getOrCreateSalvageCoreSprite(accentColor: string, dpr: number) {
   const key = salvageCoreSpriteCacheKey(accentColor, dpr);
   const cached = salvageCoreSpriteCache.get(key);
@@ -459,6 +477,181 @@ function getBackgroundLayers(width: number, height: number, dpr: number): Cached
 
   backgroundLayerCache = layers;
   return layers;
+}
+
+function getOrCreateHorizontalPerimeterModuleSprite(dpr: number) {
+  const key = perimeterSpriteCacheKey("horizontal-module", dpr);
+  const cached = horizontalPerimeterModuleSpriteCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const canvas = createLayerCanvas();
+  if (!canvas) {
+    return undefined;
+  }
+
+  const logicalWidth = PERIMETER_MODULE_SPACING;
+  const logicalHeight = PERIMETER_INNER_RAIL_DEPTH;
+  const normalizedDpr = normalizeDpr(dpr);
+  canvas.width = Math.ceil(logicalWidth * normalizedDpr);
+  canvas.height = Math.ceil(logicalHeight * normalizedDpr);
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return undefined;
+  }
+
+  ctx.setTransform(normalizedDpr, 0, 0, normalizedDpr, 0, 0);
+  const moduleCenter = logicalWidth / 2;
+  const housingX = moduleCenter - 20;
+  const towerX = moduleCenter - 7;
+
+  ctx.fillStyle = "#253140";
+  ctx.fillRect(housingX, 4, 40, 12);
+  ctx.fillStyle = "#0f1621";
+  ctx.fillRect(towerX, 0, 14, 18);
+  ctx.fillStyle = "rgba(232, 240, 255, 0.12)";
+  ctx.fillRect(housingX + 5, 6, 30, 1);
+  ctx.fillStyle = "rgba(255, 179, 71, 0.72)";
+  ctx.fillRect(moduleCenter - 2, 10, 4, 4);
+  ctx.fillStyle = "rgba(91, 121, 164, 0.88)";
+  ctx.fillRect(moduleCenter - 30, 9, 8, 6);
+  ctx.fillRect(moduleCenter + 22, 9, 8, 6);
+
+  const sprite = { canvas, logicalWidth, logicalHeight };
+  horizontalPerimeterModuleSpriteCache.set(key, sprite);
+  return sprite;
+}
+
+function getOrCreateVerticalPerimeterModuleSprite(dpr: number) {
+  const key = perimeterSpriteCacheKey("vertical-module", dpr);
+  const cached = verticalPerimeterModuleSpriteCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const canvas = createLayerCanvas();
+  if (!canvas) {
+    return undefined;
+  }
+
+  const logicalWidth = PERIMETER_INNER_RAIL_DEPTH;
+  const logicalHeight = PERIMETER_MODULE_SPACING;
+  const normalizedDpr = normalizeDpr(dpr);
+  canvas.width = Math.ceil(logicalWidth * normalizedDpr);
+  canvas.height = Math.ceil(logicalHeight * normalizedDpr);
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return undefined;
+  }
+
+  ctx.setTransform(normalizedDpr, 0, 0, normalizedDpr, 0, 0);
+  const moduleCenter = logicalHeight / 2;
+  const housingY = moduleCenter - 20;
+  const towerY = moduleCenter - 7;
+
+  ctx.fillStyle = "#253140";
+  ctx.fillRect(4, housingY, 12, 40);
+  ctx.fillStyle = "#0f1621";
+  ctx.fillRect(0, towerY, 18, 14);
+  ctx.fillStyle = "rgba(232, 240, 255, 0.12)";
+  ctx.fillRect(6, housingY + 5, 1, 30);
+  ctx.fillStyle = "rgba(255, 179, 71, 0.72)";
+  ctx.fillRect(10, moduleCenter - 2, 4, 4);
+  ctx.fillStyle = "rgba(91, 121, 164, 0.88)";
+  ctx.fillRect(9, moduleCenter - 30, 6, 8);
+  ctx.fillRect(9, moduleCenter + 22, 6, 8);
+
+  const sprite = { canvas, logicalWidth, logicalHeight };
+  verticalPerimeterModuleSpriteCache.set(key, sprite);
+  return sprite;
+}
+
+function getOrCreatePerimeterCornerSprite(dpr: number) {
+  const key = perimeterSpriteCacheKey("corner-anchor", dpr);
+  const cached = perimeterCornerSpriteCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const canvas = createLayerCanvas();
+  if (!canvas) {
+    return undefined;
+  }
+
+  const logicalWidth = PERIMETER_CORNER_ANCHOR_SIZE;
+  const logicalHeight = PERIMETER_CORNER_ANCHOR_SIZE;
+  const normalizedDpr = normalizeDpr(dpr);
+  canvas.width = Math.ceil(logicalWidth * normalizedDpr);
+  canvas.height = Math.ceil(logicalHeight * normalizedDpr);
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return undefined;
+  }
+
+  ctx.setTransform(normalizedDpr, 0, 0, normalizedDpr, 0, 0);
+
+  fillPolygon(
+    ctx,
+    [
+      { x: 0, y: 14 },
+      { x: 14, y: 0 },
+      { x: logicalWidth, y: 0 },
+      { x: logicalWidth, y: 18 },
+      { x: 18, y: logicalHeight },
+      { x: 0, y: logicalHeight },
+    ],
+    "#1f2935",
+  );
+  fillPolygon(
+    ctx,
+    [
+      { x: 0, y: 8 },
+      { x: 8, y: 0 },
+      { x: logicalWidth - 10, y: 0 },
+      { x: logicalWidth - 10, y: 9 },
+      { x: 9, y: logicalHeight - 10 },
+      { x: 0, y: logicalHeight - 10 },
+    ],
+    "rgba(255, 255, 255, 0.06)",
+  );
+  strokePolygon(
+    ctx,
+    [
+      { x: 0, y: 14 },
+      { x: 14, y: 0 },
+      { x: logicalWidth, y: 0 },
+      { x: logicalWidth, y: 18 },
+      { x: 18, y: logicalHeight },
+      { x: 0, y: logicalHeight },
+    ],
+    "rgba(232, 240, 255, 0.12)",
+    1.2,
+  );
+
+  ctx.fillStyle = "rgba(127, 231, 255, 0.2)";
+  ctx.beginPath();
+  ctx.arc(24, 24, 16, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(239, 255, 255, 0.82)";
+  ctx.beginPath();
+  ctx.arc(24, 24, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(104, 225, 253, 0.52)";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(18, 38);
+  ctx.lineTo(38, 18);
+  ctx.stroke();
+
+  const sprite = { canvas, logicalWidth, logicalHeight };
+  perimeterCornerSpriteCache.set(key, sprite);
+  return sprite;
 }
 
 function drawWrappedLayer(
@@ -608,6 +801,14 @@ function rgbTripletForColor(color: string) {
 
 function rgbaFromTriplet(rgbTriplet: string, alpha: number) {
   return `rgba(${rgbTriplet}, ${clamp(alpha, 0, 1)})`;
+}
+
+function edgeOffsetStart(boundary: number, offset: number, thickness: number, direction: 1 | -1) {
+  return direction > 0 ? boundary + offset : boundary - offset - thickness;
+}
+
+function alignedLoopStart(start: number, spacing: number) {
+  return Math.floor(start / spacing) * spacing;
 }
 
 function tracePolygon(ctx: CanvasRenderingContext2D, points: Array<{ x: number; y: number }>) {
@@ -788,6 +989,363 @@ function drawObjects(ctx: CanvasRenderingContext2D, objects: WorldObject[], camX
       continue;
     }
     drawDebrisObject(ctx, object, dpr);
+  }
+}
+
+function drawHorizontalPerimeterEdge(
+  ctx: CanvasRenderingContext2D,
+  boundaryY: number,
+  insideDirection: 1 | -1,
+  startX: number,
+  endX: number,
+  dpr: number,
+  nowMs: number,
+) {
+  const length = endX - startX;
+  if (length <= 0) {
+    return;
+  }
+
+  const outsideDirection = insideDirection === 1 ? -1 : 1;
+  const energyTravel = (nowMs * 0.05) % PERIMETER_MODULE_SPACING;
+  const shimmer = Math.sin(nowMs * 0.0024 + boundaryY * 0.01) * 0.08;
+
+  ctx.fillStyle = `rgba(14, 42, 76, ${0.18 + shimmer})`;
+  ctx.fillRect(
+    startX,
+    edgeOffsetStart(boundaryY, 0, PERIMETER_OUTER_FIELD_DEPTH, outsideDirection),
+    length,
+    PERIMETER_OUTER_FIELD_DEPTH,
+  );
+
+  for (let band = 0; band < 4; band += 1) {
+    const offset = 4 + band * 6 + Math.sin(nowMs * 0.004 + band * 1.3 + boundaryY * 0.015) * 1.5;
+    ctx.fillStyle = `rgba(123, 224, 255, ${0.05 + band * 0.025})`;
+    ctx.fillRect(startX, edgeOffsetStart(boundaryY, offset, 1.1, outsideDirection), length, 1.1);
+  }
+
+  ctx.fillStyle = "#161e29";
+  ctx.fillRect(
+    startX,
+    edgeOffsetStart(boundaryY, 0, PERIMETER_INNER_RAIL_DEPTH, insideDirection),
+    length,
+    PERIMETER_INNER_RAIL_DEPTH,
+  );
+  ctx.fillStyle = "rgba(232, 240, 255, 0.08)";
+  ctx.fillRect(startX, edgeOffsetStart(boundaryY, 6, 1, insideDirection), length, 1);
+  ctx.fillStyle = "rgba(43, 58, 79, 0.95)";
+  ctx.fillRect(startX, edgeOffsetStart(boundaryY, 13, 7, insideDirection), length, 7);
+  ctx.fillStyle = "rgba(234, 243, 255, 0.16)";
+  ctx.fillRect(startX, edgeOffsetStart(boundaryY, 20, 1, insideDirection), length, 1);
+
+  ctx.fillStyle = "rgba(127, 231, 255, 0.72)";
+  ctx.fillRect(startX, boundaryY - 1.2, length, 2.4);
+  ctx.fillStyle = "rgba(239, 255, 255, 0.9)";
+  ctx.fillRect(startX, boundaryY - 0.45, length, 0.9);
+
+  const pulseWidth = 40;
+  for (
+    let pulseX = alignedLoopStart(startX - PERIMETER_MODULE_SPACING + energyTravel, PERIMETER_MODULE_SPACING);
+    pulseX < endX + PERIMETER_MODULE_SPACING;
+    pulseX += PERIMETER_MODULE_SPACING
+  ) {
+    ctx.fillStyle = "rgba(232, 252, 255, 0.82)";
+    ctx.fillRect(pulseX, boundaryY - 1.8, pulseWidth, 3.6);
+    ctx.fillStyle = "rgba(52, 191, 255, 0.32)";
+    ctx.fillRect(pulseX - 8, boundaryY - 4, pulseWidth + 16, 8);
+  }
+
+  const moduleSprite = getOrCreateHorizontalPerimeterModuleSprite(dpr);
+  for (
+    let moduleStartX = alignedLoopStart(startX, PERIMETER_MODULE_SPACING) - PERIMETER_MODULE_SPACING / 2;
+    moduleStartX < endX + PERIMETER_MODULE_SPACING;
+    moduleStartX += PERIMETER_MODULE_SPACING
+  ) {
+    if (moduleSprite) {
+      if (insideDirection === 1) {
+        ctx.drawImage(
+          moduleSprite.canvas,
+          moduleStartX,
+          boundaryY,
+          moduleSprite.logicalWidth,
+          moduleSprite.logicalHeight,
+        );
+      } else {
+        ctx.save();
+        ctx.translate(moduleStartX, boundaryY);
+        ctx.scale(1, -1);
+        ctx.drawImage(moduleSprite.canvas, 0, 0, moduleSprite.logicalWidth, moduleSprite.logicalHeight);
+        ctx.restore();
+      }
+      continue;
+    }
+
+    const moduleCenter = moduleStartX + PERIMETER_MODULE_SPACING / 2;
+    const housingX = moduleCenter - 20;
+    const towerX = moduleCenter - 7;
+
+    ctx.fillStyle = "#253140";
+    ctx.fillRect(housingX, edgeOffsetStart(boundaryY, 4, 12, insideDirection), 40, 12);
+    ctx.fillStyle = "#0f1621";
+    ctx.fillRect(towerX, edgeOffsetStart(boundaryY, 0, 18, insideDirection), 14, 18);
+    ctx.fillStyle = "rgba(232, 240, 255, 0.12)";
+    ctx.fillRect(housingX + 5, edgeOffsetStart(boundaryY, 6, 1, insideDirection), 30, 1);
+    ctx.fillStyle = "rgba(255, 179, 71, 0.72)";
+    ctx.fillRect(moduleCenter - 2, edgeOffsetStart(boundaryY, 10, 4, insideDirection), 4, 4);
+    ctx.fillStyle = "rgba(91, 121, 164, 0.88)";
+    ctx.fillRect(moduleCenter - 30, edgeOffsetStart(boundaryY, 9, 6, insideDirection), 8, 6);
+    ctx.fillRect(moduleCenter + 22, edgeOffsetStart(boundaryY, 9, 6, insideDirection), 8, 6);
+  }
+}
+
+function drawVerticalPerimeterEdge(
+  ctx: CanvasRenderingContext2D,
+  boundaryX: number,
+  insideDirection: 1 | -1,
+  startY: number,
+  endY: number,
+  dpr: number,
+  nowMs: number,
+) {
+  const length = endY - startY;
+  if (length <= 0) {
+    return;
+  }
+
+  const outsideDirection = insideDirection === 1 ? -1 : 1;
+  const energyTravel = (nowMs * 0.05) % PERIMETER_MODULE_SPACING;
+  const shimmer = Math.sin(nowMs * 0.0022 + boundaryX * 0.012) * 0.08;
+
+  ctx.fillStyle = `rgba(14, 42, 76, ${0.18 + shimmer})`;
+  ctx.fillRect(
+    edgeOffsetStart(boundaryX, 0, PERIMETER_OUTER_FIELD_DEPTH, outsideDirection),
+    startY,
+    PERIMETER_OUTER_FIELD_DEPTH,
+    length,
+  );
+
+  for (let band = 0; band < 4; band += 1) {
+    const offset = 4 + band * 6 + Math.sin(nowMs * 0.004 + band * 1.3 + boundaryX * 0.015) * 1.5;
+    ctx.fillStyle = `rgba(123, 224, 255, ${0.05 + band * 0.025})`;
+    ctx.fillRect(edgeOffsetStart(boundaryX, offset, 1.1, outsideDirection), startY, 1.1, length);
+  }
+
+  ctx.fillStyle = "#161e29";
+  ctx.fillRect(
+    edgeOffsetStart(boundaryX, 0, PERIMETER_INNER_RAIL_DEPTH, insideDirection),
+    startY,
+    PERIMETER_INNER_RAIL_DEPTH,
+    length,
+  );
+  ctx.fillStyle = "rgba(232, 240, 255, 0.08)";
+  ctx.fillRect(edgeOffsetStart(boundaryX, 6, 1, insideDirection), startY, 1, length);
+  ctx.fillStyle = "rgba(43, 58, 79, 0.95)";
+  ctx.fillRect(edgeOffsetStart(boundaryX, 13, 7, insideDirection), startY, 7, length);
+  ctx.fillStyle = "rgba(234, 243, 255, 0.16)";
+  ctx.fillRect(edgeOffsetStart(boundaryX, 20, 1, insideDirection), startY, 1, length);
+
+  ctx.fillStyle = "rgba(127, 231, 255, 0.72)";
+  ctx.fillRect(boundaryX - 1.2, startY, 2.4, length);
+  ctx.fillStyle = "rgba(239, 255, 255, 0.9)";
+  ctx.fillRect(boundaryX - 0.45, startY, 0.9, length);
+
+  const pulseHeight = 40;
+  for (
+    let pulseY = alignedLoopStart(startY - PERIMETER_MODULE_SPACING + energyTravel, PERIMETER_MODULE_SPACING);
+    pulseY < endY + PERIMETER_MODULE_SPACING;
+    pulseY += PERIMETER_MODULE_SPACING
+  ) {
+    ctx.fillStyle = "rgba(232, 252, 255, 0.82)";
+    ctx.fillRect(boundaryX - 1.8, pulseY, 3.6, pulseHeight);
+    ctx.fillStyle = "rgba(52, 191, 255, 0.32)";
+    ctx.fillRect(boundaryX - 4, pulseY - 8, 8, pulseHeight + 16);
+  }
+
+  const moduleSprite = getOrCreateVerticalPerimeterModuleSprite(dpr);
+  for (
+    let moduleStartY = alignedLoopStart(startY, PERIMETER_MODULE_SPACING) - PERIMETER_MODULE_SPACING / 2;
+    moduleStartY < endY + PERIMETER_MODULE_SPACING;
+    moduleStartY += PERIMETER_MODULE_SPACING
+  ) {
+    if (moduleSprite) {
+      if (insideDirection === 1) {
+        ctx.drawImage(
+          moduleSprite.canvas,
+          boundaryX,
+          moduleStartY,
+          moduleSprite.logicalWidth,
+          moduleSprite.logicalHeight,
+        );
+      } else {
+        ctx.save();
+        ctx.translate(boundaryX, moduleStartY);
+        ctx.scale(-1, 1);
+        ctx.drawImage(moduleSprite.canvas, 0, 0, moduleSprite.logicalWidth, moduleSprite.logicalHeight);
+        ctx.restore();
+      }
+      continue;
+    }
+
+    const moduleCenter = moduleStartY + PERIMETER_MODULE_SPACING / 2;
+    const housingY = moduleCenter - 20;
+    const towerY = moduleCenter - 7;
+
+    ctx.fillStyle = "#253140";
+    ctx.fillRect(edgeOffsetStart(boundaryX, 4, 12, insideDirection), housingY, 12, 40);
+    ctx.fillStyle = "#0f1621";
+    ctx.fillRect(edgeOffsetStart(boundaryX, 0, 18, insideDirection), towerY, 18, 14);
+    ctx.fillStyle = "rgba(232, 240, 255, 0.12)";
+    ctx.fillRect(edgeOffsetStart(boundaryX, 6, 1, insideDirection), housingY + 5, 1, 30);
+    ctx.fillStyle = "rgba(255, 179, 71, 0.72)";
+    ctx.fillRect(edgeOffsetStart(boundaryX, 10, 4, insideDirection), moduleCenter - 2, 4, 4);
+    ctx.fillStyle = "rgba(91, 121, 164, 0.88)";
+    ctx.fillRect(edgeOffsetStart(boundaryX, 9, 6, insideDirection), moduleCenter - 30, 6, 8);
+    ctx.fillRect(edgeOffsetStart(boundaryX, 9, 6, insideDirection), moduleCenter + 22, 6, 8);
+  }
+}
+
+function drawCornerAnchor(
+  ctx: CanvasRenderingContext2D,
+  cornerX: number,
+  cornerY: number,
+  xDirection: 1 | -1,
+  yDirection: 1 | -1,
+  dpr: number,
+  nowMs: number,
+) {
+  const cornerSprite = getOrCreatePerimeterCornerSprite(dpr);
+  if (cornerSprite) {
+    ctx.save();
+    ctx.translate(cornerX, cornerY);
+    ctx.scale(xDirection, yDirection);
+    ctx.drawImage(
+      cornerSprite.canvas,
+      0,
+      0,
+      cornerSprite.logicalWidth,
+      cornerSprite.logicalHeight,
+    );
+    ctx.restore();
+  } else {
+    const point = (x: number, y: number) => ({
+      x: cornerX + x * xDirection,
+      y: cornerY + y * yDirection,
+    });
+
+    fillPolygon(
+      ctx,
+      [
+        point(0, 14),
+        point(14, 0),
+        point(PERIMETER_CORNER_ANCHOR_SIZE, 0),
+        point(PERIMETER_CORNER_ANCHOR_SIZE, 18),
+        point(18, PERIMETER_CORNER_ANCHOR_SIZE),
+        point(0, PERIMETER_CORNER_ANCHOR_SIZE),
+      ],
+      "#1f2935",
+    );
+    fillPolygon(
+      ctx,
+      [
+        point(0, 8),
+        point(8, 0),
+        point(PERIMETER_CORNER_ANCHOR_SIZE - 10, 0),
+        point(PERIMETER_CORNER_ANCHOR_SIZE - 10, 9),
+        point(9, PERIMETER_CORNER_ANCHOR_SIZE - 10),
+        point(0, PERIMETER_CORNER_ANCHOR_SIZE - 10),
+      ],
+      "rgba(255, 255, 255, 0.06)",
+    );
+    strokePolygon(
+      ctx,
+      [
+        point(0, 14),
+        point(14, 0),
+        point(PERIMETER_CORNER_ANCHOR_SIZE, 0),
+        point(PERIMETER_CORNER_ANCHOR_SIZE, 18),
+        point(18, PERIMETER_CORNER_ANCHOR_SIZE),
+        point(0, PERIMETER_CORNER_ANCHOR_SIZE),
+      ],
+      "rgba(232, 240, 255, 0.12)",
+      1.2,
+    );
+  }
+
+  const pulse = 0.76 + (Math.sin(nowMs * 0.004 + cornerX * 0.01 + cornerY * 0.008) * 0.5 + 0.5) * 0.34;
+  ctx.fillStyle = `rgba(127, 231, 255, ${0.22 * pulse})`;
+  ctx.beginPath();
+  ctx.arc(cornerX + 24 * xDirection, cornerY + 24 * yDirection, 16, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = `rgba(239, 255, 255, ${0.9 * pulse})`;
+  ctx.beginPath();
+  ctx.arc(cornerX + 24 * xDirection, cornerY + 24 * yDirection, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(104, 225, 253, 0.52)";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(cornerX + 18 * xDirection, cornerY + 38 * yDirection);
+  ctx.lineTo(cornerX + 38 * xDirection, cornerY + 18 * yDirection);
+  ctx.stroke();
+}
+
+function drawWorldPerimeter(
+  ctx: CanvasRenderingContext2D,
+  worldWidth: number,
+  worldHeight: number,
+  camX: number,
+  camY: number,
+  width: number,
+  height: number,
+  nowMs: number,
+) {
+  const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const visibleLeft = camX - PERIMETER_VIEW_MARGIN;
+  const visibleRight = camX + width + PERIMETER_VIEW_MARGIN;
+  const visibleTop = camY - PERIMETER_VIEW_MARGIN;
+  const visibleBottom = camY + height + PERIMETER_VIEW_MARGIN;
+  const topEdgeStartX = clamp(visibleLeft, 0, worldWidth);
+  const topEdgeEndX = clamp(visibleRight, 0, worldWidth);
+  const leftEdgeStartY = clamp(visibleTop, 0, worldHeight);
+  const leftEdgeEndY = clamp(visibleBottom, 0, worldHeight);
+
+  if (visibleTop <= PERIMETER_OUTER_FIELD_DEPTH + PERIMETER_INNER_RAIL_DEPTH) {
+    drawHorizontalPerimeterEdge(ctx, 0, 1, topEdgeStartX, topEdgeEndX, dpr, nowMs);
+  }
+  if (visibleBottom >= worldHeight - (PERIMETER_OUTER_FIELD_DEPTH + PERIMETER_INNER_RAIL_DEPTH)) {
+    drawHorizontalPerimeterEdge(ctx, worldHeight, -1, topEdgeStartX, topEdgeEndX, dpr, nowMs);
+  }
+  if (visibleLeft <= PERIMETER_OUTER_FIELD_DEPTH + PERIMETER_INNER_RAIL_DEPTH) {
+    drawVerticalPerimeterEdge(ctx, 0, 1, leftEdgeStartY, leftEdgeEndY, dpr, nowMs);
+  }
+  if (visibleRight >= worldWidth - (PERIMETER_OUTER_FIELD_DEPTH + PERIMETER_INNER_RAIL_DEPTH)) {
+    drawVerticalPerimeterEdge(ctx, worldWidth, -1, leftEdgeStartY, leftEdgeEndY, dpr, nowMs);
+  }
+
+  if (
+    visibleLeft <= PERIMETER_CORNER_ANCHOR_SIZE &&
+    visibleTop <= PERIMETER_CORNER_ANCHOR_SIZE
+  ) {
+    drawCornerAnchor(ctx, 0, 0, 1, 1, dpr, nowMs);
+  }
+  if (
+    visibleRight >= worldWidth - PERIMETER_CORNER_ANCHOR_SIZE &&
+    visibleTop <= PERIMETER_CORNER_ANCHOR_SIZE
+  ) {
+    drawCornerAnchor(ctx, worldWidth, 0, -1, 1, dpr, nowMs);
+  }
+  if (
+    visibleLeft <= PERIMETER_CORNER_ANCHOR_SIZE &&
+    visibleBottom >= worldHeight - PERIMETER_CORNER_ANCHOR_SIZE
+  ) {
+    drawCornerAnchor(ctx, 0, worldHeight, 1, -1, dpr, nowMs);
+  }
+  if (
+    visibleRight >= worldWidth - PERIMETER_CORNER_ANCHOR_SIZE &&
+    visibleBottom >= worldHeight - PERIMETER_CORNER_ANCHOR_SIZE
+  ) {
+    drawCornerAnchor(ctx, worldWidth, worldHeight, -1, -1, dpr, nowMs);
   }
 }
 
@@ -1618,9 +2176,7 @@ export function renderWorld(
   ctx.save();
   ctx.translate(-camX, -camY);
 
-  ctx.strokeStyle = "rgba(255,80,80,0.35)";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(0, 0, snapshot.world.width, snapshot.world.height);
+  drawWorldPerimeter(ctx, snapshot.world.width, snapshot.world.height, camX, camY, width, height, nowMs);
 
   drawObjects(ctx, snapshot.objects, camX, camY, width, height);
 
