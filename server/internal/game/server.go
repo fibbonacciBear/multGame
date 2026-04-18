@@ -274,6 +274,9 @@ type Player struct {
 	PreDeathMass           float64
 	SpawnInvulnerableUntil time.Time
 	PendingSpawnSeparation bool
+	LastPickupFeedbackSeq  int64
+	LastPickupMassGain     float64
+	LastPickupHealthGain   float64
 }
 
 type ClientConnection struct {
@@ -389,18 +392,25 @@ type snapshotShot struct {
 	Color   string  `json:"color"`
 }
 
+type pickupFeedbackState struct {
+	Sequence   int64   `json:"sequence"`
+	MassGain   float64 `json:"massGain"`
+	HealthGain float64 `json:"healthGain"`
+}
+
 type selfState struct {
-	PlayerID    string  `json:"playerId"`
-	PlayerName  string  `json:"playerName"`
-	Score       int     `json:"score"`
-	Mass        float64 `json:"mass"`
-	Health      float64 `json:"health"`
-	MaxHealth   float64 `json:"maxHealth"`
-	Kills       int     `json:"kills"`
-	IsAlive     bool    `json:"isAlive"`
-	RespawnInMs int64   `json:"respawnInMs"`
-	DeathReason string  `json:"deathReason,omitempty"`
-	KilledBy    string  `json:"killedBy,omitempty"`
+	PlayerID       string               `json:"playerId"`
+	PlayerName     string               `json:"playerName"`
+	Score          int                  `json:"score"`
+	Mass           float64              `json:"mass"`
+	Health         float64              `json:"health"`
+	MaxHealth      float64              `json:"maxHealth"`
+	Kills          int                  `json:"kills"`
+	IsAlive        bool                 `json:"isAlive"`
+	RespawnInMs    int64                `json:"respawnInMs"`
+	DeathReason    string               `json:"deathReason,omitempty"`
+	KilledBy       string               `json:"killedBy,omitempty"`
+	PickupFeedback *pickupFeedbackState `json:"pickupFeedback,omitempty"`
 }
 
 type scoreboardResult struct {
@@ -1235,18 +1245,28 @@ func (s *Server) buildSelfState(player *Player, now time.Time) *selfState {
 		respawnIn = player.RespawnAt.Sub(now).Milliseconds()
 	}
 
+	var pickupFeedback *pickupFeedbackState
+	if player.LastPickupFeedbackSeq > 0 {
+		pickupFeedback = &pickupFeedbackState{
+			Sequence:   player.LastPickupFeedbackSeq,
+			MassGain:   player.LastPickupMassGain,
+			HealthGain: player.LastPickupHealthGain,
+		}
+	}
+
 	return &selfState{
-		PlayerID:    player.ID,
-		PlayerName:  player.Name,
-		Score:       player.Score,
-		Mass:        player.Mass,
-		Health:      player.Health,
-		MaxHealth:   s.maxHealthForMass(player.Mass),
-		Kills:       player.Kills,
-		IsAlive:     player.Alive,
-		RespawnInMs: respawnIn,
-		DeathReason: player.DeathReason,
-		KilledBy:    player.KilledBy,
+		PlayerID:       player.ID,
+		PlayerName:     player.Name,
+		Score:          player.Score,
+		Mass:           player.Mass,
+		Health:         player.Health,
+		MaxHealth:      s.maxHealthForMass(player.Mass),
+		Kills:          player.Kills,
+		IsAlive:        player.Alive,
+		RespawnInMs:    respawnIn,
+		DeathReason:    player.DeathReason,
+		KilledBy:       player.KilledBy,
+		PickupFeedback: pickupFeedback,
 	}
 }
 

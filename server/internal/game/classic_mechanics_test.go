@@ -118,7 +118,7 @@ func TestObjectPickupAllowedDuringInvulnerability(t *testing.T) {
 		X:      player.X,
 		Y:      player.Y,
 		Radius: 6,
-		Mass:   0.8,
+		Mass:   1.5,
 	}}
 
 	server.resolveObjectCollisionsLocked(now)
@@ -128,6 +128,54 @@ func TestObjectPickupAllowedDuringInvulnerability(t *testing.T) {
 	}
 	if got := server.lobby.Objects[0].ID; got == "obj-1" {
 		t.Fatalf("object was not respawned after pickup")
+	}
+	if player.LastPickupFeedbackSeq != 1 {
+		t.Fatalf("pickup feedback sequence = %d, want 1", player.LastPickupFeedbackSeq)
+	}
+}
+
+func TestObjectPickupHealsByMaxHealthGainAndStoresFeedback(t *testing.T) {
+	server := newClassicTestServer()
+	now := time.Now()
+
+	player := &Player{
+		ID:     "player-1",
+		Alive:  true,
+		Mass:   server.cfg.StartingMass,
+		Health: 55,
+		X:      220,
+		Y:      220,
+	}
+	objectMass := 2.0
+	server.lobby.Players[player.ID] = player
+	server.lobby.Objects = []*Collectible{{
+		ID:     "obj-1",
+		X:      player.X,
+		Y:      player.Y,
+		Radius: 8,
+		Mass:   objectMass,
+	}}
+
+	oldMaxHealth := server.maxHealthForMass(player.Mass)
+	newMaxHealth := server.maxHealthForMass(player.Mass + objectMass)
+	wantHealthGain := newMaxHealth - oldMaxHealth
+
+	server.resolveObjectCollisionsLocked(now)
+
+	if math.Abs(player.Mass-(server.cfg.StartingMass+objectMass)) > 0.001 {
+		t.Fatalf("player mass = %v, want %v", player.Mass, server.cfg.StartingMass+objectMass)
+	}
+	if math.Abs(player.Health-(55+wantHealthGain)) > 0.001 {
+		t.Fatalf("player health = %v, want %v", player.Health, 55+wantHealthGain)
+	}
+	if player.LastPickupFeedbackSeq != 1 {
+		t.Fatalf("pickup feedback sequence = %d, want 1", player.LastPickupFeedbackSeq)
+	}
+	if math.Abs(player.LastPickupMassGain-objectMass) > 0.001 {
+		t.Fatalf("pickup mass gain = %v, want %v", player.LastPickupMassGain, objectMass)
+	}
+	if math.Abs(player.LastPickupHealthGain-wantHealthGain) > 0.001 {
+		t.Fatalf("pickup health gain = %v, want %v", player.LastPickupHealthGain, wantHealthGain)
 	}
 }
 

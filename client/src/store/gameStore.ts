@@ -36,6 +36,11 @@ export type SelfState = {
   respawnInMs: number;
   deathReason?: string;
   killedBy?: string;
+  pickupFeedback?: {
+    sequence: number;
+    massGain: number;
+    healthGain: number;
+  };
 };
 
 type GameStore = {

@@ -16,6 +16,12 @@ const MIN_PROJECTILE_HEADING_SPEED = 0.001;
 const PLAYER_SPRITE_SCALE = 2.4;
 const SHOW_HITBOX_DEBUG = import.meta.env.VITE_SHOW_HITBOX_DEBUG === "true";
 const MASS_COLOR_BUCKETS = 64;
+const DEBRIS_BASE_FILL = "#4a576d";
+const DEBRIS_SHADOW_FILL = "#2a3443";
+const DEBRIS_EDGE_STROKE = "rgba(232, 240, 255, 0.2)";
+const DEBRIS_HIGHLIGHT_FILL = "rgba(239, 245, 255, 0.24)";
+const SALVAGE_CORE_SPRITE_BASE_RADIUS = 12;
+const SALVAGE_CORE_SPRITE_LOGICAL_SIZE = SALVAGE_CORE_SPRITE_BASE_RADIUS * 4;
 
 type PlayerSpriteImageState = {
   image?: HTMLImageElement;
@@ -24,6 +30,7 @@ type PlayerSpriteImageState = {
 };
 
 const playerSpriteImageCache = new Map<string, PlayerSpriteImageState>();
+const salvageCoreSpriteCache = new Map<string, SalvageCoreSprite>();
 
 type StarPoint = {
   x: number;
@@ -47,6 +54,11 @@ type CachedBackgroundLayers = {
   base?: HTMLCanvasElement;
   ambient?: HTMLCanvasElement;
   hero?: HTMLCanvasElement;
+};
+
+type SalvageCoreSprite = {
+  canvas: HTMLCanvasElement;
+  logicalSize: number;
 };
 
 type ProjectileRenderData = {
@@ -87,6 +99,16 @@ type ExplosionEffect = {
   seed: number;
 };
 
+type PickupTextEffect = {
+  active: boolean;
+  x: number;
+  y: number;
+  massGain: number;
+  healthGain: number;
+  createdAtMs: number;
+  ttlMs: number;
+};
+
 type ExhaustNozzle = {
   x: number;
   y: number;
@@ -112,6 +134,7 @@ const EXHAUST_MAX_SPEED = 620;
 const EXHAUST_SIZE_BOOST = 1.85;
 const MAX_IMPACT_EFFECTS = 120;
 const MAX_EXPLOSION_EFFECTS = 20;
+const MAX_PICKUP_TEXT_EFFECTS = 20;
 const EXPLOSION_HEAVY_LOAD_THRESHOLD = 6;
 const FIRE_RING_RGB = "255, 179, 110";
 const SHOCK_RING_RGB = "231, 246, 255";
@@ -127,6 +150,7 @@ const colorRgbCache = new Map<string, string>();
 let lastProjectileMatchId = "";
 let lastEffectsMatchId = "";
 let lastEffectsSyncedServerTime = 0;
+let lastPickupFeedbackSequence = 0;
 const projectileRenderablesScratch: ProjectileRenderData[] = [];
 const trackedProjectiles = new Map<string, TrackedProjectile>();
 const trackedPlayerAlive = new Map<string, boolean>();
@@ -134,12 +158,17 @@ const currentProjectileIdsScratch = new Set<string>();
 const currentPlayerIdsScratch = new Set<string>();
 const activeImpactEffectIndices: number[] = [];
 const activeExplosionEffectIndices: number[] = [];
+const activePickupTextEffectIndices: number[] = [];
 const impactActiveListIndexBySlot: number[] = Array.from(
   { length: MAX_IMPACT_EFFECTS },
   () => -1,
 );
 const explosionActiveListIndexBySlot: number[] = Array.from(
   { length: MAX_EXPLOSION_EFFECTS },
+  () => -1,
+);
+const pickupTextActiveListIndexBySlot: number[] = Array.from(
+  { length: MAX_PICKUP_TEXT_EFFECTS },
   () => -1,
 );
 const impactEffects: ImpactEffect[] = Array.from({ length: MAX_IMPACT_EFFECTS }, () => ({
@@ -164,8 +193,18 @@ const explosionEffects: ExplosionEffect[] = Array.from({ length: MAX_EXPLOSION_E
   ttlMs: 0,
   seed: 0,
 }));
+const pickupTextEffects: PickupTextEffect[] = Array.from({ length: MAX_PICKUP_TEXT_EFFECTS }, () => ({
+  active: false,
+  x: 0,
+  y: 0,
+  massGain: 0,
+  healthGain: 0,
+  createdAtMs: 0,
+  ttlMs: 0,
+}));
 let nextImpactEffectIndex = 0;
 let nextExplosionEffectIndex = 0;
+let nextPickupTextEffectIndex = 0;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -309,6 +348,46 @@ function normalizeDpr(dpr: number) {
     return 1;
   }
   return Math.round(dpr * 100) / 100;
+}
+
+function salvageCoreSpriteCacheKey(accentColor: string, dpr: number) {
+  return `${accentColor}|${normalizeDpr(dpr)}`;
+}
+
+function getOrCreateSalvageCoreSprite(accentColor: string, dpr: number) {
+  const key = salvageCoreSpriteCacheKey(accentColor, dpr);
+  const cached = salvageCoreSpriteCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const canvas = createLayerCanvas();
+  if (!canvas) {
+    return undefined;
+  }
+
+  const logicalSize = SALVAGE_CORE_SPRITE_LOGICAL_SIZE;
+  const normalizedDpr = normalizeDpr(dpr);
+  canvas.width = Math.ceil(logicalSize * normalizedDpr);
+  canvas.height = Math.ceil(logicalSize * normalizedDpr);
+
+  const spriteCtx = canvas.getContext("2d");
+  if (!spriteCtx) {
+    return undefined;
+  }
+
+  spriteCtx.setTransform(normalizedDpr, 0, 0, normalizedDpr, 0, 0);
+  spriteCtx.translate(logicalSize / 2, logicalSize / 2);
+  drawSalvageCore(
+    spriteCtx,
+    SALVAGE_CORE_SPRITE_BASE_RADIUS,
+    rgbTripletForColor(accentColor),
+    1,
+  );
+
+  const sprite = { canvas, logicalSize };
+  salvageCoreSpriteCache.set(key, sprite);
+  return sprite;
 }
 
 function getBackgroundLayers(width: number, height: number, dpr: number): CachedBackgroundLayers {
@@ -468,7 +547,7 @@ function drawSpaceBackground(
 }
 
 function objectMassColor(mass: number) {
-  const t = clamp((mass - 0.35) / 0.8, 0, 1);
+  const t = clamp(mass - 1, 0, 1);
   const bucket = Math.round(t * MASS_COLOR_BUCKETS);
   const cached = objectMassColorCache.get(bucket);
   if (cached) {
@@ -476,9 +555,10 @@ function objectMassColor(mass: number) {
   }
 
   const normalized = bucket / MASS_COLOR_BUCKETS;
-  const r = Math.round(72 + 160 * normalized);
-  const g = Math.round(224 - 100 * normalized);
-  const color = `rgb(${r},${g},50)`;
+  const r = Math.round(112 + 143 * normalized);
+  const g = Math.round(227 - 18 * normalized);
+  const b = Math.round(255 - 147 * normalized);
+  const color = `rgb(${r},${g},${b})`;
   objectMassColorCache.set(bucket, color);
   return color;
 }
@@ -530,7 +610,174 @@ function rgbaFromTriplet(rgbTriplet: string, alpha: number) {
   return `rgba(${rgbTriplet}, ${clamp(alpha, 0, 1)})`;
 }
 
+function tracePolygon(ctx: CanvasRenderingContext2D, points: Array<{ x: number; y: number }>) {
+  if (points.length === 0) {
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) {
+    ctx.lineTo(points[index].x, points[index].y);
+  }
+  ctx.closePath();
+}
+
+function fillPolygon(ctx: CanvasRenderingContext2D, points: Array<{ x: number; y: number }>, fillStyle: string) {
+  tracePolygon(ctx, points);
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+}
+
+function strokePolygon(
+  ctx: CanvasRenderingContext2D,
+  points: Array<{ x: number; y: number }>,
+  strokeStyle: string,
+  lineWidth: number,
+) {
+  tracePolygon(ctx, points);
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke();
+}
+
+function drawSalvageCore(ctx: CanvasRenderingContext2D, radius: number, accentRgb: string, pulse: number) {
+  const shellPieces = [
+    [
+      { x: -radius * 0.98, y: -radius * 0.16 },
+      { x: -radius * 0.7, y: -radius * 0.58 },
+      { x: -radius * 0.22, y: -radius * 0.38 },
+      { x: -radius * 0.4, y: radius * 0.06 },
+      { x: -radius * 0.88, y: radius * 0.16 },
+    ],
+    [
+      { x: radius * 0.28, y: -radius * 0.64 },
+      { x: radius * 0.82, y: -radius * 0.38 },
+      { x: radius * 0.92, y: radius * 0.08 },
+      { x: radius * 0.54, y: radius * 0.34 },
+      { x: radius * 0.18, y: -radius * 0.02 },
+    ],
+    [
+      { x: -radius * 0.34, y: radius * 0.24 },
+      { x: radius * 0.1, y: radius * 0.38 },
+      { x: radius * 0.2, y: radius * 0.9 },
+      { x: -radius * 0.22, y: radius * 0.98 },
+      { x: -radius * 0.58, y: radius * 0.58 },
+    ],
+  ];
+  const highlightPieces = [
+    [
+      { x: -radius * 0.84, y: -radius * 0.12 },
+      { x: -radius * 0.64, y: -radius * 0.42 },
+      { x: -radius * 0.34, y: -radius * 0.32 },
+      { x: -radius * 0.48, y: -radius * 0.02 },
+    ],
+    [
+      { x: radius * 0.36, y: -radius * 0.5 },
+      { x: radius * 0.7, y: -radius * 0.34 },
+      { x: radius * 0.72, y: -radius * 0.04 },
+      { x: radius * 0.48, y: -radius * 0.12 },
+    ],
+    [
+      { x: -radius * 0.22, y: radius * 0.36 },
+      { x: radius * 0.02, y: radius * 0.44 },
+      { x: radius * 0.08, y: radius * 0.74 },
+      { x: -radius * 0.16, y: radius * 0.8 },
+    ],
+  ];
+
+  const glowRadius = radius * 1.55 * pulse;
+  const halo = ctx.createRadialGradient(0, 0, radius * 0.08, 0, 0, glowRadius);
+  halo.addColorStop(0, `rgba(255, 255, 255, ${0.96 * pulse})`);
+  halo.addColorStop(0.28, `rgba(${accentRgb}, ${0.78 * pulse})`);
+  halo.addColorStop(0.66, `rgba(${accentRgb}, ${0.22 * pulse})`);
+  halo.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(0, 0, glowRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  for (let index = 0; index < shellPieces.length; index += 1) {
+    fillPolygon(ctx, shellPieces[index], DEBRIS_BASE_FILL);
+    fillPolygon(ctx, highlightPieces[index], DEBRIS_HIGHLIGHT_FILL);
+    strokePolygon(ctx, shellPieces[index], DEBRIS_EDGE_STROKE, Math.max(0.8, radius * 0.1));
+  }
+
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(236, 244, 255, 0.26)";
+  ctx.lineWidth = Math.max(1, radius * 0.14);
+  const ringRadius = radius * 0.74;
+  ctx.beginPath();
+  ctx.arc(0, 0, ringRadius, -Math.PI * 0.08, Math.PI * 0.62);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, 0, ringRadius, Math.PI * 0.92, Math.PI * 1.56);
+  ctx.stroke();
+
+  const coreRadius = radius * 0.54;
+  const core = ctx.createRadialGradient(-radius * 0.08, -radius * 0.1, 0, 0, 0, coreRadius);
+  core.addColorStop(0, "rgba(255, 255, 255, 0.98)");
+  core.addColorStop(0.28, "rgba(245, 252, 255, 0.95)");
+  core.addColorStop(0.62, `rgba(${accentRgb}, 0.92)`);
+  core.addColorStop(1, `rgba(${accentRgb}, 0.18)`);
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(0, 0, coreRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.34)";
+  ctx.lineWidth = Math.max(0.9, radius * 0.07);
+  ctx.beginPath();
+  ctx.arc(0, 0, coreRadius * 0.64, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.28)";
+  ctx.lineWidth = Math.max(0.7, radius * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.12, 0);
+  ctx.lineTo(radius * 0.12, 0);
+  ctx.moveTo(0, -radius * 0.12);
+  ctx.lineTo(0, radius * 0.12);
+  ctx.stroke();
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+  ctx.beginPath();
+  ctx.arc(-radius * 0.16, -radius * 0.16, radius * 0.13, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawDebrisObject(ctx: CanvasRenderingContext2D, object: WorldObject, dpr: number) {
+  const accentColor = objectMassColor(object.mass);
+  const accentRgb = rgbTripletForColor(accentColor);
+  const seed = hashSeed(`debris:${object.id}`);
+  const radius = object.radius;
+  const renderRadius = radius * 0.82;
+  const rotation = ((seed >>> 3) % 360) * (Math.PI / 180);
+  const pulsePhase = ((seed >>> 12) % 360) * (Math.PI / 180);
+  const nowSeconds = (typeof performance === "undefined" ? Date.now() : performance.now()) / 1000;
+  const pulse = 0.96 + (Math.sin(nowSeconds * 2.2 + pulsePhase) * 0.5 + 0.5) * 0.12;
+  const sprite = getOrCreateSalvageCoreSprite(accentColor, dpr);
+
+  ctx.save();
+  ctx.translate(object.x, object.y);
+  ctx.rotate(rotation);
+
+  ctx.beginPath();
+  ctx.arc(0, 0, renderRadius * 1.14, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(1, 4, 10, 0.22)";
+  ctx.fill();
+
+  if (sprite) {
+    const drawSize = sprite.logicalSize * (renderRadius / SALVAGE_CORE_SPRITE_BASE_RADIUS) * pulse;
+    ctx.drawImage(sprite.canvas, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
+  } else {
+    drawSalvageCore(ctx, renderRadius, accentRgb, pulse);
+  }
+
+  ctx.restore();
+}
+
 function drawObjects(ctx: CanvasRenderingContext2D, objects: WorldObject[], camX: number, camY: number, width: number, height: number) {
+  const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
   for (const object of objects) {
     if (
       object.x + object.radius < camX ||
@@ -540,11 +787,7 @@ function drawObjects(ctx: CanvasRenderingContext2D, objects: WorldObject[], camX
     ) {
       continue;
     }
-
-    ctx.beginPath();
-    ctx.arc(object.x, object.y, object.radius, 0, Math.PI * 2);
-    ctx.fillStyle = objectMassColor(object.mass);
-    ctx.fill();
+    drawDebrisObject(ctx, object, dpr);
   }
 }
 
@@ -779,16 +1022,23 @@ function clearAllEffects() {
   currentPlayerIdsScratch.clear();
   activeImpactEffectIndices.length = 0;
   activeExplosionEffectIndices.length = 0;
+  activePickupTextEffectIndices.length = 0;
   impactActiveListIndexBySlot.fill(-1);
   explosionActiveListIndexBySlot.fill(-1);
+  pickupTextActiveListIndexBySlot.fill(-1);
   for (let index = 0; index < impactEffects.length; index += 1) {
     impactEffects[index].active = false;
   }
   for (let index = 0; index < explosionEffects.length; index += 1) {
     explosionEffects[index].active = false;
   }
+  for (let index = 0; index < pickupTextEffects.length; index += 1) {
+    pickupTextEffects[index].active = false;
+  }
   nextImpactEffectIndex = 0;
   nextExplosionEffectIndex = 0;
+  nextPickupTextEffectIndex = 0;
+  lastPickupFeedbackSequence = 0;
   lastEffectsSyncedServerTime = 0;
 }
 
@@ -827,6 +1077,13 @@ function nextExplosionEffectSlot() {
   const slotIndex = nextExplosionEffectIndex;
   const slot = explosionEffects[slotIndex];
   nextExplosionEffectIndex = (nextExplosionEffectIndex + 1) % explosionEffects.length;
+  return { slotIndex, slot };
+}
+
+function nextPickupTextEffectSlot() {
+  const slotIndex = nextPickupTextEffectIndex;
+  const slot = pickupTextEffects[slotIndex];
+  nextPickupTextEffectIndex = (nextPickupTextEffectIndex + 1) % pickupTextEffects.length;
   return { slotIndex, slot };
 }
 
@@ -876,6 +1133,21 @@ function spawnExplosionEffect(
   effect.createdAtMs = nowMs;
   effect.ttlMs = 620;
   effect.seed = hashSeed(seedSource) / 0xffffffff;
+}
+
+function spawnPickupTextEffect(x: number, y: number, massGain: number, healthGain: number, nowMs: number) {
+  const { slotIndex, slot: effect } = nextPickupTextEffectSlot();
+  if (pickupTextActiveListIndexBySlot[slotIndex] === -1) {
+    pickupTextActiveListIndexBySlot[slotIndex] = activePickupTextEffectIndices.length;
+    activePickupTextEffectIndices.push(slotIndex);
+  }
+  effect.active = true;
+  effect.x = x;
+  effect.y = y;
+  effect.massGain = massGain;
+  effect.healthGain = healthGain;
+  effect.createdAtMs = nowMs;
+  effect.ttlMs = 1000;
 }
 
 function syncCombatEffects(
@@ -969,6 +1241,22 @@ function syncCombatEffects(
       trackedPlayerAlive.delete(playerId);
     }
   }
+
+  const pickupFeedback = snapshot.you?.pickupFeedback;
+  if (pickupFeedback && pickupFeedback.sequence > lastPickupFeedbackSequence) {
+    const selfPlayer = snapshot.players.find((player) => player.id === snapshot.you?.playerId);
+    if (selfPlayer) {
+      spawnPickupTextEffect(
+        selfPlayer.x,
+        selfPlayer.y - selfPlayer.radius * 0.9,
+        pickupFeedback.massGain,
+        pickupFeedback.healthGain,
+        nowMs,
+      );
+    }
+    lastPickupFeedbackSequence = pickupFeedback.sequence;
+  }
+
   lastEffectsSyncedServerTime = snapshot.serverTime;
 }
 
@@ -1120,6 +1408,60 @@ function drawExplosionEffects(
     ctx.beginPath();
     ctx.arc(effect.x, effect.y, shockRadius, 0, Math.PI * 2);
     ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function formatPickupStat(value: number) {
+  const rounded = Math.round(value * 10) / 10;
+  if (Math.abs(rounded - Math.round(rounded)) < 0.001) {
+    return `${Math.round(rounded)}`;
+  }
+  return rounded.toFixed(1);
+}
+
+function drawPickupTextEffects(
+  ctx: CanvasRenderingContext2D,
+  nowMs: number,
+  camX: number,
+  camY: number,
+  width: number,
+  height: number,
+) {
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = "600 12px Space Grotesk, sans-serif";
+  for (let activeIndex = activePickupTextEffectIndices.length - 1; activeIndex >= 0; activeIndex -= 1) {
+    const effectIndex = activePickupTextEffectIndices[activeIndex];
+    const effect = pickupTextEffects[effectIndex];
+    if (!effect.active) {
+      removeActiveIndex(activePickupTextEffectIndices, pickupTextActiveListIndexBySlot, activeIndex);
+      continue;
+    }
+
+    const age = nowMs - effect.createdAtMs;
+    if (age >= effect.ttlMs) {
+      effect.active = false;
+      removeActiveIndex(activePickupTextEffectIndices, pickupTextActiveListIndexBySlot, activeIndex);
+      continue;
+    }
+
+    const progress = age / effect.ttlMs;
+    const fade = 1 - progress;
+    const label = `+${formatPickupStat(effect.massGain)} mass  +${formatPickupStat(effect.healthGain)} health`;
+    const textX = effect.x;
+    const textY = effect.y - progress * 28;
+    if (!isWithinViewport(textX, textY, 42, camX, camY, width, height, 72)) {
+      continue;
+    }
+
+    ctx.globalAlpha = 0.22 * fade;
+    ctx.fillStyle = "#04111b";
+    ctx.fillText(label, textX, textY + 1.5);
+
+    ctx.globalAlpha = 0.72 * fade;
+    ctx.fillStyle = "rgba(232, 242, 255, 0.92)";
+    ctx.fillText(label, textX, textY);
   }
   ctx.restore();
 }
@@ -1307,6 +1649,8 @@ export function renderWorld(
     }
     drawPlayer(ctx, player, player.id === localPlayerId);
   }
+
+  drawPickupTextEffects(ctx, nowMs, camX, camY, width, height);
 
   ctx.restore();
   ctx.globalAlpha = 1;

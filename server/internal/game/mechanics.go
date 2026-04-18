@@ -55,6 +55,22 @@ func (s *Server) setPlayerMassPreservingHealth(player *Player, newMass float64) 
 	player.Health = s.rescaleHealthForMassChange(oldHealth, oldMass, player.Mass)
 }
 
+func (s *Server) applyCollectiblePickup(player *Player, collectibleMass float64) (float64, float64) {
+	massGain := math.Max(collectibleMass, 0)
+	oldMass := player.Mass
+	oldMaxHealth := s.maxHealthForMass(oldMass)
+	newMass := oldMass + massGain
+	newMaxHealth := s.maxHealthForMass(newMass)
+	player.Mass = math.Max(newMass, 0.01)
+	if !player.Alive && player.Health <= 0 {
+		return massGain, 0
+	}
+
+	oldHealth := player.Health
+	player.Health = clamp(oldHealth+math.Max(newMaxHealth-oldMaxHealth, 0), 0, newMaxHealth)
+	return massGain, math.Max(player.Health-oldHealth, 0)
+}
+
 func (s *Server) crashDamageForPlayer(player *Player) float64 {
 	return s.maxHealthForMass(player.Mass) * s.cfg.CrashDamagePct
 }

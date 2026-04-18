@@ -36,6 +36,8 @@ func (s *Server) resolveObjectCollisionsLocked(_ time.Time) {
 		}
 
 		playerRadius := s.radiusForMass(player.Mass)
+		pickupMassGain := 0.0
+		pickupHealthGain := 0.0
 		for index := range s.lobby.Objects {
 			object := s.lobby.Objects[index]
 			dx := player.X - object.X
@@ -44,14 +46,22 @@ func (s *Server) resolveObjectCollisionsLocked(_ time.Time) {
 				continue
 			}
 
-			s.setPlayerMassPreservingHealth(player, player.Mass+object.Mass)
+			massGain, healthGain := s.applyCollectiblePickup(player, object.Mass)
+			pickupMassGain += massGain
+			pickupHealthGain += healthGain
 			s.lobby.Objects[index] = s.spawnObjectLocked()
+			playerRadius = s.radiusForMass(player.Mass)
+		}
+		if pickupMassGain > 0 || pickupHealthGain > 0 {
+			player.LastPickupFeedbackSeq += 1
+			player.LastPickupMassGain = pickupMassGain
+			player.LastPickupHealthGain = pickupHealthGain
 		}
 	}
 }
 
 func (s *Server) spawnObjectLocked() *Collectible {
-	mass := s.randFloat(0.35, 1.15)
+	mass := s.randFloat(1, 2)
 	radius := 4 + mass*6
 	return &Collectible{
 		ID:     randomID("obj"),
