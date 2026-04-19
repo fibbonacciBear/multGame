@@ -29,6 +29,7 @@ const (
 	botWanderTimeout           = 3 * time.Second
 	botWanderStallWindow       = 1100 * time.Millisecond
 	botWanderCandidateAttempts = 8
+	botCollectibleCooldown     = 20 * time.Second
 )
 
 type botProfile struct {
@@ -266,7 +267,7 @@ func (s *Server) updateBotsLocked(now time.Time) {
 		profile := s.botProfileForLocked(player.BotLevel)
 		s.ensureBotWanderTargetLocked(player, profile, now)
 		target, distance := s.closestTargetLocked(player, livePlayers)
-		object := s.bestCollectibleLocked(player)
+		object := s.botCollectibleTargetLocked(player, profile, now)
 
 		targetX, targetY, shoot, usingWander := s.botDecisionLocked(player, profile, target, object, distance, now)
 		if usingWander && s.shouldRetargetBotWanderLocked(player, profile, now) {
@@ -274,6 +275,7 @@ func (s *Server) updateBotsLocked(now time.Time) {
 			targetX = player.BotTargetX
 			targetY = player.BotTargetY
 		}
+		targetX, targetY = s.applyBotCornerEscapeOverrideLocked(player, profile, targetX, targetY)
 		targetX, targetY = s.applyBotBorderAvoidanceLocked(player, profile, targetX, targetY)
 		angle := s.botSteeringAngleLocked(player, profile, targetX, targetY)
 		player.Input = InputState{
@@ -338,18 +340,7 @@ func (s *Server) retargetBotLocked(player *Player, profile botProfile, now time.
 }
 
 func (s *Server) randomBotWanderTargetLocked(player *Player, profile botProfile) (float64, float64) {
-	radius := s.radiusForMass(player.Mass)
-	inset := math.Max(profile.WanderInset, radius)
-	minX := clamp(inset, radius, s.cfg.WorldWidth-radius)
-	maxX := clamp(s.cfg.WorldWidth-inset, radius, s.cfg.WorldWidth-radius)
-	minY := clamp(inset, radius, s.cfg.WorldHeight-radius)
-	maxY := clamp(s.cfg.WorldHeight-inset, radius, s.cfg.WorldHeight-radius)
-	if minX > maxX {
-		minX, maxX = radius, s.cfg.WorldWidth-radius
-	}
-	if minY > maxY {
-		minY, maxY = radius, s.cfg.WorldHeight-radius
-	}
+	minX, maxX, minY, maxY := s.botWanderBoundsLocked(player, profile)
 
 	minDistance := s.botMinimumWanderDistanceLocked(player, profile)
 	bestX, bestY := s.randFloat(minX, maxX), s.randFloat(minY, maxY)
@@ -426,22 +417,86 @@ func (s *Server) botSteeringAngleLocked(player *Player, profile botProfile, targ
 	return angle
 }
 
+func (s *Server) applyBotCornerEscapeOverrideLocked(player *Player, profile botProfile, targetX, targetY float64) (float64, float64) {
+	if escapeX, escapeY, recovering := s.botCornerRecoveryTargetLocked(player, profile); recovering {
+		return escapeX, escapeY
+	}
+	if profile.Behavior != botBehaviorWander || profile.AvoidBorders {
+		return targetX, targetY
+	}
+
+	radius := s.radiusForMass(player.Mass)
+	cornerMargin := math.Max(radius*1.5, 60)
+	nearLeft := player.X <= radius+cornerMargin
+	nearRight := player.X >= s.cfg.WorldWidth-radius-cornerMargin
+	nearTop := player.Y <= radius+cornerMargin
+	nearBottom := player.Y >= s.cfg.WorldHeight-radius-cornerMargin
+	if !(nearLeft || nearRight) || !(nearTop || nearBottom) {
+		return targetX, targetY
+	}
+
+	minX, maxX, minY, maxY := s.botBoundsForInsetLocked(player, math.Max(profile.WanderInset, 120))
+	escapeX, escapeY := targetX, targetY
+	if nearLeft {
+		escapeX = minX
+	} else if nearRight {
+		escapeX = maxX
+	}
+	if nearTop {
+		escapeY = minY
+	} else if nearBottom {
+		escapeY = maxY
+	}
+	return escapeX, escapeY
+}
+
+func (s *Server) botCornerRecoveryTargetLocked(player *Player, profile botProfile) (float64, float64, bool) {
+	if !profile.AvoidBorders || profile.BorderMargin <= 0 {
+		player.BotCornerRecovering = false
+		return 0, 0, false
+	}
+
+	minX, maxX, minY, maxY := s.botSafeBoundsLocked(player, profile)
+	enterBuffer := math.Max(profile.BorderMargin*0.15, 24)
+	exitBuffer := math.Max(profile.BorderMargin*0.45, 80)
+	buffer := enterBuffer
+	if player.BotCornerRecovering {
+		buffer = exitBuffer
+	}
+
+	nearLeft := player.X <= minX+buffer
+	nearRight := player.X >= maxX-buffer
+	nearTop := player.Y <= minY+buffer
+	nearBottom := player.Y >= maxY-buffer
+	recovering := (nearLeft || nearRight) && (nearTop || nearBottom)
+	player.BotCornerRecovering = recovering
+	if !recovering {
+		return 0, 0, false
+	}
+
+	extraInset := profile.BorderMargin + math.Max(profile.BorderMargin*0.6, 120)
+	recoverMinX, recoverMaxX, recoverMinY, recoverMaxY := s.botBoundsForInsetLocked(player, extraInset)
+	escapeX := s.cfg.WorldWidth / 2
+	escapeY := s.cfg.WorldHeight / 2
+	if nearLeft {
+		escapeX = recoverMinX
+	} else if nearRight {
+		escapeX = recoverMaxX
+	}
+	if nearTop {
+		escapeY = recoverMinY
+	} else if nearBottom {
+		escapeY = recoverMaxY
+	}
+	return escapeX, escapeY, true
+}
+
 func (s *Server) applyBotBorderAvoidanceLocked(player *Player, profile botProfile, targetX, targetY float64) (float64, float64) {
 	if !profile.AvoidBorders || profile.BorderMargin <= 0 {
 		return targetX, targetY
 	}
 
-	radius := s.radiusForMass(player.Mass)
-	minX := radius + profile.BorderMargin
-	maxX := s.cfg.WorldWidth - radius - profile.BorderMargin
-	minY := radius + profile.BorderMargin
-	maxY := s.cfg.WorldHeight - radius - profile.BorderMargin
-	if minX > maxX {
-		minX, maxX = radius, s.cfg.WorldWidth-radius
-	}
-	if minY > maxY {
-		minY, maxY = radius, s.cfg.WorldHeight-radius
-	}
+	minX, maxX, minY, maxY := s.botSafeBoundsLocked(player, profile)
 
 	safeTargetX := clamp(targetX, minX, maxX)
 	safeTargetY := clamp(targetY, minY, maxY)
@@ -474,6 +529,34 @@ func (s *Server) applyBotBorderAvoidanceLocked(player *Player, profile botProfil
 		return lerp(safeTargetX, centerX, pressure), lerp(safeTargetY, centerY, pressure)
 	}
 	return safeTargetX, safeTargetY
+}
+
+func (s *Server) botWanderBoundsLocked(player *Player, profile botProfile) (float64, float64, float64, float64) {
+	inset := profile.WanderInset
+	if profile.AvoidBorders {
+		inset = math.Max(inset, profile.BorderMargin)
+	}
+	return s.botBoundsForInsetLocked(player, inset)
+}
+
+func (s *Server) botSafeBoundsLocked(player *Player, profile botProfile) (float64, float64, float64, float64) {
+	return s.botBoundsForInsetLocked(player, profile.BorderMargin)
+}
+
+func (s *Server) botBoundsForInsetLocked(player *Player, inset float64) (float64, float64, float64, float64) {
+	radius := s.radiusForMass(player.Mass)
+	inset = math.Max(inset, 0)
+	minX := radius + inset
+	maxX := s.cfg.WorldWidth - radius - inset
+	minY := radius + inset
+	maxY := s.cfg.WorldHeight - radius - inset
+	if minX > maxX {
+		minX, maxX = radius, s.cfg.WorldWidth-radius
+	}
+	if minY > maxY {
+		minY, maxY = radius, s.cfg.WorldHeight-radius
+	}
+	return minX, maxX, minY, maxY
 }
 
 func lerp(start, end, amount float64) float64 {
@@ -546,10 +629,56 @@ func (s *Server) botProfileForLocked(level BotLevel) botProfile {
 	return defaultBotProfiles()[BotLevelFull]
 }
 
-func (s *Server) bestCollectibleLocked(player *Player) *Collectible {
+func (s *Server) botCollectibleTargetLocked(player *Player, profile botProfile, now time.Time) *Collectible {
+	if profile.Behavior == botBehaviorWander {
+		player.BotCollectibleTargetID = ""
+		return nil
+	}
+	if !player.BotCollectibleCooldownUntil.IsZero() && now.Before(player.BotCollectibleCooldownUntil) {
+		player.BotCollectibleTargetID = ""
+		return nil
+	}
+	if player.BotCollectibleTargetID != "" {
+		if object := s.collectibleByIDLocked(player.BotCollectibleTargetID); s.isCollectibleSafeForBotLocked(player, profile, object) {
+			return object
+		}
+		player.BotCollectibleTargetID = ""
+	}
+
+	object := s.bestCollectibleLocked(player, profile)
+	if object != nil {
+		player.BotCollectibleTargetID = object.ID
+	}
+	return object
+}
+
+func (s *Server) collectibleByIDLocked(id string) *Collectible {
+	for _, object := range s.lobby.Objects {
+		if object.ID == id {
+			return object
+		}
+	}
+	return nil
+}
+
+func (s *Server) isCollectibleSafeForBotLocked(player *Player, profile botProfile, object *Collectible) bool {
+	if object == nil {
+		return false
+	}
+	if !profile.AvoidBorders || profile.BorderMargin <= 0 {
+		return true
+	}
+	minX, maxX, minY, maxY := s.botSafeBoundsLocked(player, profile)
+	return object.X >= minX && object.X <= maxX && object.Y >= minY && object.Y <= maxY
+}
+
+func (s *Server) bestCollectibleLocked(player *Player, profile botProfile) *Collectible {
 	var best *Collectible
 	bestScore := -1.0
 	for _, object := range s.lobby.Objects {
+		if !s.isCollectibleSafeForBotLocked(player, profile, object) {
+			continue
+		}
 		distance := math.Hypot(object.X-player.X, object.Y-player.Y)
 		score := object.Mass / math.Max(distance, 100)
 		if score > bestScore {

@@ -29,7 +29,7 @@ type crashPair struct {
 	rightID string
 }
 
-func (s *Server) resolveObjectCollisionsLocked(_ time.Time) {
+func (s *Server) resolveObjectCollisionsLocked(now time.Time) {
 	for _, player := range s.lobby.Players {
 		if !player.Alive {
 			continue
@@ -56,6 +56,10 @@ func (s *Server) resolveObjectCollisionsLocked(_ time.Time) {
 			player.LastPickupFeedbackSeq += 1
 			player.LastPickupMassGain = pickupMassGain
 			player.LastPickupHealthGain = pickupHealthGain
+			if player.IsBot {
+				player.BotCollectibleTargetID = ""
+				player.BotCollectibleCooldownUntil = now.Add(botCollectibleCooldown)
+			}
 		}
 	}
 }
