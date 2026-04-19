@@ -11,6 +11,7 @@ const MINIMAP_SIZE = 160;
 export default function MiniMap({ snapshot }: MiniMapProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const localPlayerId = useGameStore((state) => state.localPlayerId);
+  const cameraTargetId = useGameStore((state) => state.cameraTargetId);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -41,12 +42,13 @@ export default function MiniMap({ snapshot }: MiniMapProps) {
     for (const player of snapshot.players) {
       const x = (player.x / snapshot.world.width) * MINIMAP_SIZE;
       const y = (player.y / snapshot.world.height) * MINIMAP_SIZE;
+      const isTarget = player.id === (cameraTargetId ?? localPlayerId);
       ctx.beginPath();
-      ctx.arc(x, y, player.id === localPlayerId ? 4 : 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = player.id === localPlayerId ? "#68e1fd" : player.color;
+      ctx.arc(x, y, isTarget ? 4 : 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = isTarget ? "#68e1fd" : player.color;
       ctx.fill();
     }
-  }, [localPlayerId, snapshot]);
+  }, [cameraTargetId, localPlayerId, snapshot]);
 
   return (
     <aside className="minimap-card">

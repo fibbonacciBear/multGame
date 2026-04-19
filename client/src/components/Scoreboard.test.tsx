@@ -18,6 +18,7 @@ describe("Scoreboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useGameStore.setState({
+      phase: "intermission",
       matchOver: true,
       intermissionRemainingMs: 9500,
       scoreboard: [

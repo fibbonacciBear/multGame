@@ -29,6 +29,7 @@ describe("MainMenu", () => {
             wsUrl: "ws://localhost:8080/ws?lobby=test&token=token-1",
             lobbyId: "test",
             token: "token-1",
+            sessionMode: "player",
           }),
       });
     vi.stubGlobal("fetch", fetchMock);
@@ -53,6 +54,12 @@ describe("MainMenu", () => {
             wsUrl: "ws://localhost:8080/ws?lobby=test&token=token-1",
             lobbyId: "test",
             token: "token-1",
+            sessionMode: "player",
+          },
+          refresh: {
+            sessionMode: "player",
+            region: "local",
+            playerName: "Pilot One",
           },
         },
       });
@@ -74,6 +81,18 @@ describe("MainMenu", () => {
     expect(screen.getByRole("menuitemradio", { name: "Local" })).toBeTruthy();
   });
 
+  it("hides observer controls when frontend spectator mode is disabled", () => {
+    render(
+      <MemoryRouter>
+        <MainMenu />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByText("Observer Tools")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Spectate" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Debug Sim" })).toBeNull();
+  });
+
   it("uses a default name when input is blank", async () => {
     const fetchMock = vi
       .fn()
@@ -84,6 +103,7 @@ describe("MainMenu", () => {
             wsUrl: "ws://localhost:8080/ws?lobby=test&token=token-2",
             lobbyId: "test",
             token: "token-2",
+            sessionMode: "player",
           }),
       });
     vi.stubGlobal("fetch", fetchMock);
@@ -103,6 +123,12 @@ describe("MainMenu", () => {
             wsUrl: "ws://localhost:8080/ws?lobby=test&token=token-2",
             lobbyId: "test",
             token: "token-2",
+            sessionMode: "player",
+          },
+          refresh: {
+            sessionMode: "player",
+            region: "local",
+            playerName: "Pilot",
           },
         },
       });

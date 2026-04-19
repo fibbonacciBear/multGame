@@ -65,6 +65,11 @@ var (
 		Name: "game_lobby_player_count",
 		Help: "Total players in lobby (humans + bots).",
 	})
+
+	SpectatorConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "game_spectator_connections",
+		Help: "Connected spectator/debug observer sessions.",
+	})
 )
 
 func RegisterMetrics(reg prometheus.Registerer) {
@@ -81,5 +86,6 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		PlayerMass,
 		MatchesCompleted,
 		LobbyPlayerCount,
+		SpectatorConnections,
 	)
 }

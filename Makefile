@@ -57,7 +57,7 @@ load-images-dev:
 	docker build -t multgame/game-server:latest ./server
 	docker build -t multgame/api-server:latest ./api
 	docker build -t multgame/ws-router:latest ./ws-router
-	docker build -t multgame/web-client:latest ./client
+	docker build --build-arg VITE_SPECTATOR_MODE_ENABLED=true -t multgame/web-client:latest ./client
 	k3d image import multgame/game-server:latest -c multgame
 	k3d image import multgame/api-server:latest -c multgame
 	k3d image import multgame/ws-router:latest -c multgame

@@ -134,7 +134,9 @@ func (s *Server) collectCrashDamageLocked(
 			combatants[left.ID] = struct{}{}
 			combatants[right.ID] = struct{}{}
 			*knockbacks = append(*knockbacks, crashPair{leftID: left.ID, rightID: right.ID})
-			CrashContacts.Inc()
+			if s.shouldCollectGameplayMetricsLocked() {
+				CrashContacts.Inc()
+			}
 		}
 	}
 }
@@ -267,7 +269,7 @@ func (s *Server) applyCombatResolutionLocked(
 	for victimID := range lethal {
 		source := sources[victimID]
 		killer := s.lobby.Players[source.killerID]
-		if source.kind == combatSourceCrash {
+		if source.kind == combatSourceCrash && s.shouldCollectGameplayMetricsLocked() {
 			CrashLethalOutcomes.Inc()
 		}
 		s.killPlayerLocked(s.lobby.Players[victimID], killer, source.reason, now)

@@ -34,7 +34,7 @@ export function startGameEngine(
   resize();
   window.addEventListener("resize", resize);
 
-  const input = new InputController(canvas);
+  const input = match.sessionMode === "player" ? new InputController(canvas) : undefined;
   const network = new NetworkClient(match, options?.refreshMatch);
   network.connect();
 
@@ -47,7 +47,7 @@ export function startGameEngine(
       return;
     }
 
-    if (timestamp - lastInputSentAt >= INPUT_SEND_INTERVAL_MS) {
+    if (input && timestamp - lastInputSentAt >= INPUT_SEND_INTERVAL_MS) {
       const inputPayload = JSON.stringify(input.getState());
       network.sendInput(inputPayload);
       lastInputSentAt = timestamp;
@@ -60,6 +60,7 @@ export function startGameEngine(
         snapshot,
         useGameStore.getState().localPlayerId,
         network.getLatestSnapshot(),
+        useGameStore.getState().cameraTargetId,
       );
     }
 
@@ -77,7 +78,7 @@ export function startGameEngine(
       window.cancelAnimationFrame(animationFrame);
       window.removeEventListener("resize", resize);
       network.dispose();
-      input.dispose();
+      input?.dispose();
       useGameStore.getState().resetMatchUi();
     },
   };

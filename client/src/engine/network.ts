@@ -213,7 +213,20 @@ export class NetworkClient {
       const message = parseServerMessage(event.data);
 
       if (message.type === "welcome") {
-        useGameStore.getState().setLocalPlayerId(message.playerId);
+        this.match = {
+          ...this.match,
+          sessionMode: message.sessionMode,
+          debugSessionId: message.debugSessionId ?? this.match.debugSessionId,
+        };
+        useGameStore.getState().setSessionState({
+          sessionMode: message.sessionMode,
+          viewerId: message.viewerId,
+          localPlayerId: message.playerId,
+          cameraTargetId: message.cameraTargetId ?? message.playerId,
+          phase: message.phase,
+          matchKind: message.matchKind,
+          debugSessionId: message.debugSessionId,
+        });
         return;
       }
 
@@ -247,6 +260,9 @@ export class NetworkClient {
           intermissionRemainingMs: normalizedMessage.intermissionRemainingMs ?? 0,
           scoreboard: normalizedMessage.scoreboard,
           serverNotice: normalizedMessage.serverNotice,
+          phase: normalizedMessage.phase,
+          matchKind: normalizedMessage.matchKind,
+          debugSessionId: normalizedMessage.debugSessionId,
         });
         for (const listener of this.snapshotListeners) {
           listener(normalizedMessage);
@@ -286,6 +302,7 @@ export class NetworkClient {
       if (refreshed) {
         return;
       }
+      return;
     }
     useGameStore.getState().setConnectionStatus("connecting", "Connection lost, retrying...");
     this.scheduleReconnect();
@@ -311,7 +328,13 @@ export class NetworkClient {
   }
 
   private shouldRematch() {
-    return this.refreshMatch !== undefined && this.match.wsUrl.includes("/ws/");
+    if (!this.refreshMatch) {
+      return false;
+    }
+    if (this.match.sessionMode !== "player") {
+      return true;
+    }
+    return this.match.wsUrl.includes("/ws/");
   }
 
   private async tryRefreshMatch() {
@@ -512,6 +535,9 @@ export class NetworkClient {
     scratch.serverTime = current.serverTime;
     scratch.world = current.world;
     scratch.matchId = current.matchId;
+    scratch.phase = current.phase;
+    scratch.matchKind = current.matchKind;
+    scratch.debugSessionId = current.debugSessionId;
     scratch.matchOver = current.matchOver;
     scratch.timeRemainingMs = current.timeRemainingMs;
     scratch.intermissionRemainingMs = current.intermissionRemainingMs;
@@ -526,6 +552,9 @@ export class NetworkClient {
   }
 
   sendInput(payload: string) {
+    if (this.match.sessionMode !== "player") {
+      return;
+    }
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(payload);
     }

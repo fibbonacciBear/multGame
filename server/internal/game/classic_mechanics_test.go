@@ -4,6 +4,7 @@ import (
 	"io"
 	"log"
 	"math"
+	mathrand "math/rand"
 	"testing"
 	"time"
 )
@@ -432,5 +433,271 @@ func TestEvictDisconnectedPlayersLockedRespectsGrace(t *testing.T) {
 
 	if _, ok := server.lobby.Players[player.ID]; !ok {
 		t.Fatalf("expected disconnected player to remain within grace period")
+	}
+}
+
+func TestCustomBotProfilesCanBeSelectedWithoutCodeChanges(t *testing.T) {
+	cfg := Config{
+		LobbyID:                   "lobby-test",
+		RedisAddr:                 "localhost:6379",
+		TickRate:                  60,
+		SnapshotRate:              20,
+		MaxPlayers:                10,
+		WorldWidth:                1200,
+		WorldHeight:               800,
+		GravityAccel:              2400,
+		Drag:                      0.98,
+		TerminalSpeed:             900,
+		NumObjects:                8,
+		StartingMass:              10,
+		StartingHealth:            100,
+		ProjectileSpeed:           1250,
+		ProjectileDamage:          28,
+		ProjectileRadius:          5,
+		ShootCooldown:             250 * time.Millisecond,
+		ProjectileTTL:             1200 * time.Millisecond,
+		MatchDuration:             time.Minute,
+		RespawnDelay:              2 * time.Second,
+		BotFillDelay:              time.Hour,
+		HealthTickThreshold:       2 * time.Second,
+		BotDifficultyMode:         "fixed",
+		BotDifficultyDistribution: "dodger",
+		BotDifficultyProfiles: `{
+			"dodger": {
+				"behavior": "evasive",
+				"avoidBorders": true,
+				"threatRadius": 640,
+				"wanderInset": 260
+			}
+		}`,
+	}
+	server := NewServer(cfg, log.New(io.Discard, "", 0))
+
+	got := server.chooseBotLevelLocked()
+	if got != BotLevel("dodger") {
+		t.Fatalf("custom bot profile = %q, want %q", got, "dodger")
+	}
+
+	profile := server.botProfileForLocked(got)
+	if profile.Behavior != botBehaviorEvasive {
+		t.Fatalf("custom profile behavior = %q, want %q", profile.Behavior, botBehaviorEvasive)
+	}
+	if !profile.AvoidBorders {
+		t.Fatalf("custom profile should enable border avoidance")
+	}
+	if math.Abs(profile.ThreatRadius-640) > 0.001 {
+		t.Fatalf("custom profile threat radius = %v, want 640", profile.ThreatRadius)
+	}
+}
+
+func TestEvasiveBotSteersAwayFromCorner(t *testing.T) {
+	server := newClassicTestServer()
+	server.rng = mathrand.New(mathrand.NewSource(1))
+	now := time.Now()
+	radius := server.radiusForMass(server.cfg.StartingMass)
+
+	bot := &Player{
+		ID:       "bot-evasive",
+		IsBot:    true,
+		Alive:    true,
+		Mass:     server.cfg.StartingMass,
+		Health:   server.maxHealthForMass(server.cfg.StartingMass),
+		X:        radius,
+		Y:        radius,
+		BotLevel: BotLevelEvasive,
+	}
+	threat := &Player{
+		ID:     "human-threat",
+		Alive:  true,
+		Mass:   server.cfg.StartingMass,
+		Health: server.maxHealthForMass(server.cfg.StartingMass),
+		X:      bot.X + 40,
+		Y:      bot.Y + 40,
+	}
+	server.lobby.Players[bot.ID] = bot
+	server.lobby.Players[threat.ID] = threat
+
+	server.updateBotsLocked(now)
+
+	if dx := math.Cos(bot.Input.Angle); dx <= 0 {
+		t.Fatalf("bot steered into left wall: cos(angle) = %v, want > 0", dx)
+	}
+	if dy := math.Sin(bot.Input.Angle); dy <= 0 {
+		t.Fatalf("bot steered into top wall: sin(angle) = %v, want > 0", dy)
+	}
+}
+
+func TestCombatBotSteersBackInsideWhenFleeingBorder(t *testing.T) {
+	server := newClassicTestServer()
+	server.rng = mathrand.New(mathrand.NewSource(2))
+	now := time.Now()
+	radius := server.radiusForMass(server.cfg.StartingMass)
+
+	bot := &Player{
+		ID:       "bot-combat",
+		IsBot:    true,
+		Alive:    true,
+		Mass:     server.cfg.StartingMass,
+		Health:   server.maxHealthForMass(server.cfg.StartingMass),
+		X:        server.cfg.WorldWidth - radius,
+		Y:        server.cfg.WorldHeight / 2,
+		BotLevel: BotLevelFull,
+	}
+	threat := &Player{
+		ID:     "heavy-human",
+		Alive:  true,
+		Mass:   bot.Mass * 2,
+		Health: server.maxHealthForMass(bot.Mass * 2),
+		X:      bot.X - 50,
+		Y:      bot.Y,
+	}
+	server.lobby.Players[bot.ID] = bot
+	server.lobby.Players[threat.ID] = threat
+
+	server.updateBotsLocked(now)
+
+	if dx := math.Cos(bot.Input.Angle); dx >= 0 {
+		t.Fatalf("combat bot steered into right wall: cos(angle) = %v, want < 0", dx)
+	}
+}
+
+func TestWanderBotRetargetsAfterArrival(t *testing.T) {
+	server := newClassicTestServer()
+	server.rng = mathrand.New(mathrand.NewSource(3))
+	now := time.Now()
+
+	bot := &Player{
+		ID:                    "bot-wander",
+		IsBot:                 true,
+		Alive:                 true,
+		Mass:                  server.cfg.StartingMass,
+		Health:                server.maxHealthForMass(server.cfg.StartingMass),
+		X:                     420,
+		Y:                     320,
+		BotLevel:              BotLevelDummy,
+		BotTargetX:            430,
+		BotTargetY:            326,
+		BotRetargetAt:         now.Add(time.Second),
+		BotLastProgressAt:     now,
+		BotLastTargetDistance: math.Hypot(10, 6),
+	}
+	server.lobby.Players[bot.ID] = bot
+
+	oldTargetX, oldTargetY := bot.BotTargetX, bot.BotTargetY
+	server.updateBotsLocked(now)
+
+	if bot.BotTargetX == oldTargetX && bot.BotTargetY == oldTargetY {
+		t.Fatalf("bot should retarget after arriving at waypoint")
+	}
+	if distance := math.Hypot(bot.BotTargetX-bot.X, bot.BotTargetY-bot.Y); distance < 200 {
+		t.Fatalf("new wander target too close: got distance %v, want >= 200", distance)
+	}
+}
+
+func TestWanderBotRetargetsWhenStalled(t *testing.T) {
+	server := newClassicTestServer()
+	server.rng = mathrand.New(mathrand.NewSource(4))
+	now := time.Now()
+
+	bot := &Player{
+		ID:                    "bot-stalled",
+		IsBot:                 true,
+		Alive:                 true,
+		Mass:                  server.cfg.StartingMass,
+		Health:                server.maxHealthForMass(server.cfg.StartingMass),
+		X:                     520,
+		Y:                     340,
+		BotLevel:              BotLevelEvasive,
+		BotTargetX:            860,
+		BotTargetY:            560,
+		BotRetargetAt:         now.Add(time.Second),
+		BotLastProgressAt:     now.Add(-2 * time.Second),
+		BotLastTargetDistance: math.Hypot(860-520, 560-340),
+	}
+	server.lobby.Players[bot.ID] = bot
+
+	oldTargetX, oldTargetY := bot.BotTargetX, bot.BotTargetY
+	server.updateBotsLocked(now)
+
+	if bot.BotTargetX == oldTargetX && bot.BotTargetY == oldTargetY {
+		t.Fatalf("bot should retarget after stalling on a waypoint")
+	}
+}
+
+func TestLevelZeroBotKeepsWaypointUntilArrival(t *testing.T) {
+	server := newClassicTestServer()
+	server.rng = mathrand.New(mathrand.NewSource(6))
+	now := time.Now()
+
+	bot := &Player{
+		ID:                    "bot-level-zero",
+		IsBot:                 true,
+		Alive:                 true,
+		Mass:                  server.cfg.StartingMass,
+		Health:                server.maxHealthForMass(server.cfg.StartingMass),
+		X:                     250,
+		Y:                     250,
+		BotLevel:              BotLevelDummy,
+		BotTargetX:            900,
+		BotTargetY:            600,
+		BotRetargetAt:         now.Add(-time.Second),
+		BotLastProgressAt:     now.Add(-5 * time.Second),
+		BotLastTargetDistance: math.Hypot(900-250, 600-250),
+	}
+	server.lobby.Players[bot.ID] = bot
+
+	oldTargetX, oldTargetY := bot.BotTargetX, bot.BotTargetY
+	server.updateBotsLocked(now)
+
+	if bot.BotTargetX != oldTargetX || bot.BotTargetY != oldTargetY {
+		t.Fatalf("level 0 bot should keep current waypoint until arrival")
+	}
+	if bot.Input.Shoot {
+		t.Fatalf("level 0 bot should never shoot")
+	}
+}
+
+func TestCombatBotKeepsWaypointWhileEngaging(t *testing.T) {
+	server := newClassicTestServer()
+	server.rng = mathrand.New(mathrand.NewSource(5))
+	now := time.Now()
+
+	bot := &Player{
+		ID:                    "bot-engage",
+		IsBot:                 true,
+		Alive:                 true,
+		Mass:                  server.cfg.StartingMass,
+		Health:                server.maxHealthForMass(server.cfg.StartingMass),
+		X:                     500,
+		Y:                     400,
+		BotLevel:              BotLevelFull,
+		BotTargetX:            900,
+		BotTargetY:            650,
+		BotRetargetAt:         now.Add(time.Second),
+		BotLastProgressAt:     now.Add(-2 * time.Second),
+		BotLastTargetDistance: math.Hypot(900-500, 650-400),
+	}
+	target := &Player{
+		ID:     "target",
+		Alive:  true,
+		Mass:   server.cfg.StartingMass * 0.8,
+		Health: server.maxHealthForMass(server.cfg.StartingMass) * 0.4,
+		X:      bot.X + 120,
+		Y:      bot.Y,
+	}
+	server.lobby.Players[bot.ID] = bot
+	server.lobby.Players[target.ID] = target
+
+	oldTargetX, oldTargetY := bot.BotTargetX, bot.BotTargetY
+	server.updateBotsLocked(now)
+
+	if !bot.Input.Shoot {
+		t.Fatalf("combat bot should engage nearby target while traveling")
+	}
+	if bot.BotTargetX != oldTargetX || bot.BotTargetY != oldTargetY {
+		t.Fatalf("combat engagement should not discard stored wander waypoint")
+	}
+	if dx := math.Cos(bot.Input.Angle); dx <= 0 {
+		t.Fatalf("combat bot should steer toward nearby enemy while engaging: cos(angle) = %v", dx)
 	}
 }

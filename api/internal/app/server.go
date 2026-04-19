@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,51 @@ type Config struct {
 	LobbyID                 string
 	TokenTTL                time.Duration
 	RegistryCleanupInterval time.Duration
+	SpectatorModeEnabled    bool
+	SpectatorAdminSecret    string
+}
+
+type sessionMode string
+
+const (
+	sessionModePlayer          sessionMode = "player"
+	sessionModeSpectator       sessionMode = "spectator"
+	sessionModeDebugSimulation sessionMode = "debug_simulation"
+)
+
+const (
+	matchKindNormal      = "normal"
+	matchKindDebugBotSim = "debug_bot_sim"
+)
+
+type matchJoinResponse struct {
+	WSURL          string      `json:"wsUrl"`
+	LobbyID        string      `json:"lobbyId"`
+	Token          string      `json:"token"`
+	SessionMode    sessionMode `json:"sessionMode"`
+	DebugSessionID string      `json:"debugSessionId,omitempty"`
+}
+
+type playerJoinPayload struct {
+	PlayerName string `json:"playerName"`
+	Region     string `json:"region"`
+}
+
+type spectatorJoinPayload struct {
+	Region   string `json:"region"`
+	Secret   string `json:"secret"`
+	LobbyID  string `json:"lobbyId,omitempty"`
+	ViewerID string `json:"viewerId,omitempty"`
+}
+
+type debugSimulatePayload struct {
+	Region         string `json:"region"`
+	Secret         string `json:"secret"`
+	BotCount       int    `json:"botCount"`
+	Seed           *int64 `json:"seed,omitempty"`
+	LobbyID        string `json:"lobbyId,omitempty"`
+	DebugSessionID string `json:"debugSessionId,omitempty"`
+	ViewerID       string `json:"viewerId,omitempty"`
 }
 
 type Server struct {
@@ -76,6 +122,8 @@ func LoadConfig() Config {
 		LobbyID:                 envOrDefault("LOBBY_ID", "local-lobby"),
 		TokenTTL:                envDuration("TOKEN_TTL", 10*time.Minute),
 		RegistryCleanupInterval: envDuration("REGISTRY_CLEANUP_INTERVAL", 15*time.Second),
+		SpectatorModeEnabled:    envBool("SPECTATOR_MODE_ENABLED", false),
+		SpectatorAdminSecret:    os.Getenv("SPECTATOR_ADMIN_SECRET"),
 	}
 }
 
@@ -125,10 +173,7 @@ func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	MatchmakingInFlight.Inc()
 	defer MatchmakingInFlight.Dec()
 
-	var payload struct {
-		PlayerName string `json:"playerName"`
-		Region     string `json:"region"`
-	}
+	var payload playerJoinPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
@@ -137,34 +182,142 @@ func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	playerName := sanitizeName(payload.PlayerName)
 	playerID := randomID("player")
 	now := time.Now()
-	assignment, err := s.selectLobbyAssignment(r.Context())
+	assignment, err := s.selectLobbyAssignment(r.Context(), assignmentRequest{Mode: sessionModePlayer})
 	if err != nil {
 		http.Error(w, "game servers starting up, retry in a few seconds", http.StatusServiceUnavailable)
 		return
 	}
 
 	claims := jwt.MapClaims{
-		"sub":      playerID,
-		"name":     playerName,
-		"lobby_id": assignment.LobbyID,
-		"pod_ip":   assignment.PodIP,
-		"exp":      now.Add(s.cfg.TokenTTL).Unix(),
-		"iat":      now.Unix(),
+		"sub":          playerID,
+		"name":         playerName,
+		"lobby_id":     assignment.LobbyID,
+		"pod_ip":       assignment.PodIP,
+		"session_mode": string(sessionModePlayer),
+		"exp":          now.Add(s.cfg.TokenTTL).Unix(),
+		"iat":          now.Unix(),
 	}
 
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(s.cfg.JWTSecret))
-	if err != nil {
-		http.Error(w, "failed to sign token", http.StatusInternalServerError)
+	s.writeSignedJoinResponse(w, assignment, claims, sessionModePlayer, "")
+}
+
+func (s *Server) HandleSpectate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	MatchmakingJoins.Inc()
-	wsURL := buildWSURL(s.cfg, assignment.LobbyID, token)
-	writeJSON(w, http.StatusOK, map[string]string{
-		"wsUrl":   wsURL,
-		"lobbyId": assignment.LobbyID,
-		"token":   token,
+	MatchmakingInFlight.Inc()
+	defer MatchmakingInFlight.Dec()
+
+	var payload spectatorJoinPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := s.authorizeObserverRequest(payload.Secret); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	now := time.Now()
+	viewerID := strings.TrimSpace(payload.ViewerID)
+	if viewerID == "" {
+		viewerID = randomID("viewer")
+	}
+	assignment, err := s.selectLobbyAssignment(r.Context(), assignmentRequest{
+		Mode:    sessionModeSpectator,
+		LobbyID: strings.TrimSpace(payload.LobbyID),
 	})
+	if err != nil {
+		http.Error(w, "no spectatable match available", http.StatusServiceUnavailable)
+		return
+	}
+
+	claims := jwt.MapClaims{
+		"sub":          viewerID,
+		"lobby_id":     assignment.LobbyID,
+		"pod_ip":       assignment.PodIP,
+		"session_mode": string(sessionModeSpectator),
+		"exp":          now.Add(s.cfg.TokenTTL).Unix(),
+		"iat":          now.Unix(),
+	}
+
+	s.writeSignedJoinResponse(w, assignment, claims, sessionModeSpectator, "")
+}
+
+func (s *Server) HandleDebugSimulate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	MatchmakingInFlight.Inc()
+	defer MatchmakingInFlight.Dec()
+
+	var payload debugSimulatePayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := s.authorizeObserverRequest(payload.Secret); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	now := time.Now()
+	viewerID := strings.TrimSpace(payload.ViewerID)
+	if viewerID == "" {
+		viewerID = randomID("viewer")
+	}
+	debugSessionID := strings.TrimSpace(payload.DebugSessionID)
+	request := assignmentRequest{Mode: sessionModeDebugSimulation}
+	if debugSessionID == "" {
+		debugSessionID = randomID("debug")
+		request.DebugStart = true
+	} else {
+		request.LobbyID = strings.TrimSpace(payload.LobbyID)
+		request.DebugSessionID = debugSessionID
+	}
+
+	assignment, err := s.selectLobbyAssignment(r.Context(), request)
+	if err != nil {
+		message := "debug lobby unavailable"
+		if debugSessionID != "" && !request.DebugStart {
+			message = "debug session unavailable"
+		}
+		http.Error(w, message, http.StatusServiceUnavailable)
+		return
+	}
+
+	botCount := payload.BotCount
+	if request.DebugStart {
+		if botCount <= 0 {
+			botCount = 1
+		}
+		if assignment.MaxPlayers > 0 && botCount > assignment.MaxPlayers {
+			botCount = assignment.MaxPlayers
+		}
+	}
+
+	claims := jwt.MapClaims{
+		"sub":              viewerID,
+		"lobby_id":         assignment.LobbyID,
+		"pod_ip":           assignment.PodIP,
+		"session_mode":     string(sessionModeDebugSimulation),
+		"exp":              now.Add(s.cfg.TokenTTL).Unix(),
+		"iat":              now.Unix(),
+		"debug_session_id": debugSessionID,
+	}
+	if request.DebugStart {
+		claims["debug_simulation_start"] = true
+		claims["debug_bot_count"] = botCount
+		if payload.Seed != nil {
+			claims["debug_seed"] = *payload.Seed
+		}
+	}
+
+	s.writeSignedJoinResponse(w, assignment, claims, sessionModeDebugSimulation, debugSessionID)
 }
 
 func (s *Server) HandleMatchmakingConfig(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +326,7 @@ func (s *Server) HandleMatchmakingConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	assignment, err := s.selectLobbyAssignment(r.Context())
+	assignment, err := s.selectLobbyAssignment(r.Context(), assignmentRequest{Mode: sessionModePlayer})
 	if err != nil {
 		http.Error(w, "game servers starting up, retry in a few seconds", http.StatusServiceUnavailable)
 		return
@@ -327,6 +480,44 @@ func randomID(prefix string) string {
 	return prefix + "-" + hex.EncodeToString(buf)
 }
 
+func (s *Server) authorizeObserverRequest(secret string) error {
+	if !s.cfg.SpectatorModeEnabled {
+		return fmt.Errorf("spectator mode disabled")
+	}
+	expected := strings.TrimSpace(s.cfg.SpectatorAdminSecret)
+	if expected == "" {
+		return fmt.Errorf("spectator admin secret not configured")
+	}
+	provided := strings.TrimSpace(secret)
+	if provided == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		return fmt.Errorf("invalid spectator secret")
+	}
+	return nil
+}
+
+func (s *Server) writeSignedJoinResponse(
+	w http.ResponseWriter,
+	assignment lobbyAssignment,
+	claims jwt.MapClaims,
+	mode sessionMode,
+	debugSessionID string,
+) {
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(s.cfg.JWTSecret))
+	if err != nil {
+		http.Error(w, "failed to sign token", http.StatusInternalServerError)
+		return
+	}
+
+	MatchmakingJoins.Inc()
+	writeJSON(w, http.StatusOK, matchJoinResponse{
+		WSURL:          buildWSURL(s.cfg, assignment.LobbyID, token),
+		LobbyID:        assignment.LobbyID,
+		Token:          token,
+		SessionMode:    mode,
+		DebugSessionID: debugSessionID,
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -366,4 +557,19 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

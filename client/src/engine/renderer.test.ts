@@ -54,6 +54,8 @@ const snapshot: SnapshotMessage = {
     height: 4000,
   },
   matchId: "match-1",
+  phase: "active",
+  matchKind: "normal",
   matchOver: false,
   timeRemainingMs: 1000,
   intermissionRemainingMs: 0,

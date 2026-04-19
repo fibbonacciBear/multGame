@@ -43,9 +43,19 @@ export type SelfState = {
   };
 };
 
+export type GameSessionMode = "player" | "spectator" | "debug_simulation";
+export type GameLobbyPhase = "idle" | "active" | "intermission";
+export type GameMatchKind = "normal" | "debug_bot_sim";
+
 type GameStore = {
   playerName: string;
   localPlayerId?: string;
+  viewerId?: string;
+  sessionMode: GameSessionMode;
+  cameraTargetId?: string;
+  phase: GameLobbyPhase;
+  matchKind: GameMatchKind;
+  debugSessionId?: string;
   connectionStatus: "idle" | "connecting" | "connected" | "disconnected" | "error";
   connectionError?: string;
   matchTimerMs: number;
@@ -58,6 +68,16 @@ type GameStore = {
   serverNotice?: string;
   setPlayerName: (playerName: string) => void;
   setLocalPlayerId: (playerId: string) => void;
+  setSessionState: (payload: {
+    sessionMode: GameSessionMode;
+    viewerId: string;
+    localPlayerId?: string;
+    cameraTargetId?: string;
+    phase: GameLobbyPhase;
+    matchKind: GameMatchKind;
+    debugSessionId?: string;
+  }) => void;
+  setCameraTargetId: (cameraTargetId?: string) => void;
   setConnectionStatus: (status: GameStore["connectionStatus"], error?: string) => void;
   setServerNotice: (serverNotice?: string) => void;
   setSnapshotState: (payload: {
@@ -68,6 +88,9 @@ type GameStore = {
     intermissionRemainingMs: number;
     scoreboard: ScoreboardEntry[];
     serverNotice?: string;
+    phase: GameLobbyPhase;
+    matchKind: GameMatchKind;
+    debugSessionId?: string;
   }) => void;
   setLeaderboardPreview: (entries: LeaderboardEntry[]) => void;
   resetMatchUi: () => void;
@@ -75,6 +98,12 @@ type GameStore = {
 
 const initialUiState = {
   localPlayerId: undefined,
+  viewerId: undefined,
+  sessionMode: "player" as const,
+  cameraTargetId: undefined,
+  phase: "idle" as const,
+  matchKind: "normal" as const,
+  debugSessionId: undefined,
   connectionStatus: "idle" as const,
   connectionError: undefined,
   matchTimerMs: 0,
@@ -92,6 +121,17 @@ export const useGameStore = create<GameStore>((set) => ({
   ...initialUiState,
   setPlayerName: (playerName) => set({ playerName }),
   setLocalPlayerId: (playerId) => set({ localPlayerId: playerId }),
+  setSessionState: ({ sessionMode, viewerId, localPlayerId, cameraTargetId, phase, matchKind, debugSessionId }) =>
+    set({
+      sessionMode,
+      viewerId,
+      localPlayerId,
+      cameraTargetId,
+      phase,
+      matchKind,
+      debugSessionId,
+    }),
+  setCameraTargetId: (cameraTargetId) => set({ cameraTargetId }),
   setConnectionStatus: (connectionStatus, connectionError) =>
     set({ connectionStatus, connectionError }),
   setServerNotice: (serverNotice) => set({ serverNotice }),
@@ -103,6 +143,9 @@ export const useGameStore = create<GameStore>((set) => ({
     intermissionRemainingMs,
     scoreboard,
     serverNotice,
+    phase,
+    matchKind,
+    debugSessionId,
   }) =>
     set({
       matchTimerMs,
@@ -112,6 +155,9 @@ export const useGameStore = create<GameStore>((set) => ({
       intermissionRemainingMs,
       scoreboard,
       serverNotice,
+      phase,
+      matchKind,
+      debugSessionId,
     }),
   setLeaderboardPreview: (leaderboardPreview) => set({ leaderboardPreview }),
   resetMatchUi: () => set(initialUiState),

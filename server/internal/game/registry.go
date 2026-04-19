@@ -11,10 +11,17 @@ import (
 )
 
 type registryRecord struct {
-	IP      string `json:"ip"`
-	Port    string `json:"port"`
-	State   string `json:"state"`
-	Lobbies int    `json:"lobbies"`
+	IP              string     `json:"ip"`
+	Port            string     `json:"port"`
+	State           string     `json:"state"`
+	Lobbies         int        `json:"lobbies"`
+	Phase           LobbyPhase `json:"phase"`
+	MatchOver       bool       `json:"match_over"`
+	MatchKind       MatchKind  `json:"match_kind"`
+	ConnectedHumans int        `json:"connected_humans"`
+	SpectatorCount  int        `json:"spectator_count"`
+	MaxSpectators   int        `json:"max_spectators"`
+	DebugSessionID  string     `json:"debug_session_id,omitempty"`
 }
 
 func (s *Server) initRegistryClient() {
@@ -67,23 +74,41 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 	pipe := s.redis.TxPipeline()
 	pipe.HSet(ctx, podRegistryKey, s.cfg.PodIP, payload)
 	pipe.Set(ctx, heartbeatKey(s.cfg.PodIP), "1", s.cfg.RegistryHeartbeatTTL)
-	pipe.HSet(
-		ctx,
-		lobbyKey(s.cfg.LobbyID),
-		"pod_ip",
-		s.cfg.PodIP,
-		"port",
-		s.cfg.Port,
-		"tick_rate",
-		s.cfg.TickRate,
-		"snapshot_rate",
-		s.cfg.SnapshotRate,
-		"max_players",
-		s.cfg.MaxPlayers,
-	)
+	pipe.HSet(ctx, lobbyKey(s.cfg.LobbyID), lobbyRegistryFields(s.cfg, record))
 	pipe.Expire(ctx, lobbyKey(s.cfg.LobbyID), s.cfg.LobbyTTL)
 	_, err = pipe.Exec(ctx)
 	return err
+}
+
+func lobbyRegistryFields(cfg Config, record registryRecord) map[string]any {
+	return map[string]any{
+		"pod_ip":           cfg.PodIP,
+		"port":             cfg.Port,
+		"tick_rate":        cfg.TickRate,
+		"snapshot_rate":    cfg.SnapshotRate,
+		"max_players":      cfg.MaxPlayers,
+		"phase":            string(record.Phase),
+		"match_over":       record.MatchOver,
+		"match_kind":       string(record.MatchKind),
+		"connected_humans": record.ConnectedHumans,
+		"spectator_count":  record.SpectatorCount,
+		"max_spectators":   record.MaxSpectators,
+		"debug_session_id": record.DebugSessionID,
+	}
+}
+
+func (s *Server) scheduleRegistryRefresh() {
+	if s.redis == nil || s.cfg.PodIP == "" {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := s.refreshRegistry(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			s.logger.Printf("registry refresh failed: %v", err)
+		}
+	}()
 }
 
 func (s *Server) markDraining(ctx context.Context) error {
@@ -125,15 +150,22 @@ func (s *Server) currentRegistryRecord() (registryRecord, error) {
 	state := registryStateReady
 	if s.draining {
 		state = registryStateDraining
-	} else if s.connectedHumansLocked() >= s.cfg.MaxPlayers {
+	} else if s.connectedGameplayHumansLocked() >= s.cfg.MaxPlayers {
 		state = registryStateFull
 	}
 
 	return registryRecord{
-		IP:      s.cfg.PodIP,
-		Port:    s.cfg.Port,
-		State:   state,
-		Lobbies: 1,
+		IP:              s.cfg.PodIP,
+		Port:            s.cfg.Port,
+		State:           state,
+		Lobbies:         1,
+		Phase:           s.lobby.Phase,
+		MatchOver:       s.lobby.MatchOver,
+		MatchKind:       s.lobby.MatchKind,
+		ConnectedHumans: s.connectedGameplayHumansLocked(),
+		SpectatorCount:  s.connectedSpectatorsLocked(),
+		MaxSpectators:   s.cfg.MaxSpectators,
+		DebugSessionID:  s.lobby.DebugSessionID,
 	}, nil
 }
 

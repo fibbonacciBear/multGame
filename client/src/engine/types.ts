@@ -1,9 +1,15 @@
 import type { KillFeedEntry, ScoreboardEntry, SelfState } from "../store/gameStore";
 
+export type SessionMode = "player" | "spectator" | "debug_simulation";
+export type MatchKind = "normal" | "debug_bot_sim";
+export type LobbyPhase = "idle" | "active" | "intermission";
+
 export type MatchJoinResponse = {
   wsUrl: string;
   lobbyId: string;
   token: string;
+  sessionMode: SessionMode;
+  debugSessionId?: string;
 };
 
 export type WorldPlayer = {
@@ -54,6 +60,9 @@ export type SnapshotMessage = {
     height: number;
   };
   matchId: string;
+  phase: LobbyPhase;
+  matchKind: MatchKind;
+  debugSessionId?: string;
   matchOver: boolean;
   timeRemainingMs: number;
   intermissionRemainingMs: number;
@@ -68,9 +77,15 @@ export type SnapshotMessage = {
 
 export type WelcomeMessage = {
   type: "welcome";
-  playerId: string;
+  sessionMode: SessionMode;
+  viewerId: string;
+  playerId?: string;
   lobbyId: string;
   matchId: string;
+  phase: LobbyPhase;
+  matchKind: MatchKind;
+  cameraTargetId?: string;
+  debugSessionId?: string;
 };
 
 export type ServerMessage =

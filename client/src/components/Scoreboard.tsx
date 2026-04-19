@@ -40,11 +40,12 @@ function formatCountdown(totalSeconds: number) {
 export default function Scoreboard() {
   const navigate = useNavigate();
   const matchOver = useGameStore((state) => state.matchOver);
+  const phase = useGameStore((state) => state.phase);
   const intermissionRemainingMs = useGameStore((state) => state.intermissionRemainingMs);
   const rows = useGameStore((state) => state.scoreboard);
   const localPlayerId = useGameStore((state) => state.localPlayerId);
 
-  if (!matchOver) {
+  if (!matchOver || phase !== "intermission") {
     return null;
   }
 

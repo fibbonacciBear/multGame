@@ -87,6 +87,10 @@ func normalizePath(p string) string {
 		return "/healthz"
 	case p == "/api/matchmaking/join":
 		return "/api/matchmaking/join"
+	case p == "/api/matchmaking/spectate":
+		return "/api/matchmaking/spectate"
+	case p == "/api/matchmaking/debug-simulate":
+		return "/api/matchmaking/debug-simulate"
 	case p == "/api/leaderboard":
 		return "/api/leaderboard"
 	case p == "/api/leaderboard/report":

@@ -8,6 +8,8 @@ function snapshotWithProjectiles(projectiles: unknown[]): SnapshotMessage {
     serverTime: Date.now(),
     world: { width: 4000, height: 4000 },
     matchId: "match-1",
+    phase: "active",
+    matchKind: "normal",
     matchOver: false,
     timeRemainingMs: 1000,
     intermissionRemainingMs: 0,
@@ -64,6 +66,8 @@ function snapshotWithPlayers(serverTime: number, players: SnapshotMessage["playe
     serverTime,
     world: { width: 4000, height: 4000 },
     matchId: "match-1",
+    phase: "active",
+    matchKind: "normal",
     matchOver: false,
     timeRemainingMs: 1000,
     intermissionRemainingMs: 0,
@@ -80,6 +84,7 @@ function makeClientForInterpolationTests() {
     wsUrl: "ws://localhost/ws/test",
     lobbyId: "lobby-test",
     token: "invalid.jwt.token",
+    sessionMode: "player",
   };
   return new NetworkClient(match);
 }
@@ -199,5 +204,67 @@ describe("NetworkClient.getInterpolatedSnapshot", () => {
       y: 200,
       isAlive: true,
     });
+  });
+});
+
+describe("NetworkClient reconnect behavior", () => {
+  it("refreshes direct debug sessions on close", async () => {
+    const refreshMatch = vi.fn().mockResolvedValue({
+      wsUrl: "ws://localhost:8080/ws?lobby=lobby-test&token=token-resume",
+      lobbyId: "lobby-test",
+      token: "token-resume",
+      sessionMode: "debug_simulation" as const,
+      debugSessionId: "debug-1",
+    });
+    const client = new NetworkClient(
+      {
+        wsUrl: "ws://localhost:8080/ws?lobby=lobby-test&token=token-start",
+        lobbyId: "lobby-test",
+        token: "token-start",
+        sessionMode: "debug_simulation",
+        debugSessionId: "debug-1",
+      },
+      refreshMatch,
+    ) as unknown as {
+      socket?: WebSocket;
+      openSocket: () => void;
+      handleClose: (socket: WebSocket) => Promise<void>;
+    };
+    const socket = {} as WebSocket;
+    const openSocket = vi.fn();
+    client.socket = socket;
+    client.openSocket = openSocket;
+
+    await client.handleClose(socket);
+
+    expect(refreshMatch).toHaveBeenCalledTimes(1);
+    expect(openSocket).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a stale debug start token when refresh fails", async () => {
+    const refreshMatch = vi.fn().mockRejectedValue(new Error("unavailable"));
+    const scheduleReconnect = vi.fn();
+    const client = new NetworkClient(
+      {
+        wsUrl: "ws://localhost:8080/ws?lobby=lobby-test&token=token-start",
+        lobbyId: "lobby-test",
+        token: "token-start",
+        sessionMode: "debug_simulation",
+        debugSessionId: "debug-1",
+      },
+      refreshMatch,
+    ) as unknown as {
+      socket?: WebSocket;
+      scheduleReconnect: () => void;
+      handleClose: (socket: WebSocket) => Promise<void>;
+    };
+    const socket = {} as WebSocket;
+    client.socket = socket;
+    client.scheduleReconnect = scheduleReconnect;
+
+    await client.handleClose(socket);
+
+    expect(refreshMatch).toHaveBeenCalledTimes(1);
+    expect(scheduleReconnect).not.toHaveBeenCalled();
   });
 });

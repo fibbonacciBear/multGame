@@ -2139,32 +2139,45 @@ function playerCullRadius(player: WorldPlayer) {
   return Math.max(player.radius, spriteHalfLength);
 }
 
+function selectCameraPlayer(players: WorldPlayer[], preferredId?: string) {
+  if (preferredId) {
+    const preferred = players.find((player) => player.id === preferredId);
+    if (preferred) {
+      return preferred;
+    }
+  }
+
+  return [...players].sort((left, right) => {
+    if (left.isAlive !== right.isAlive) {
+      return left.isAlive ? -1 : 1;
+    }
+    if (left.name !== right.name) {
+      return left.name.localeCompare(right.name);
+    }
+    return left.id.localeCompare(right.id);
+  })[0];
+}
+
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
   snapshot: SnapshotMessage,
   localPlayerId?: string,
   effectsSnapshot?: SnapshotMessage,
+  cameraTargetId?: string,
 ) {
   const width = ctx.canvas.clientWidth || ctx.canvas.width;
   const height = ctx.canvas.clientHeight || ctx.canvas.height;
-  const selfPlayer =
-    snapshot.players.find((player) => player.id === localPlayerId) ?? snapshot.players[0];
-
-  if (!selfPlayer) {
-    ctx.clearRect(0, 0, width, height);
-    return;
-  }
-
-  const camX = selfPlayer.x - width / 2;
-  const camY = selfPlayer.y - height / 2;
+  const preferredCameraId = cameraTargetId ?? localPlayerId;
+  const selfPlayer = selectCameraPlayer(snapshot.players, preferredCameraId);
+  const defaultCamX = snapshot.world.width / 2 - width / 2;
+  const defaultCamY = snapshot.world.height / 2 - height / 2;
+  const camX = selfPlayer ? selfPlayer.x - width / 2 : defaultCamX;
+  const camY = selfPlayer ? selfPlayer.y - height / 2 : defaultCamY;
   const nowMs = typeof performance === "undefined" ? Date.now() : performance.now();
   const effectSource = effectsSnapshot ?? snapshot;
-  const effectCameraPlayer =
-    effectSource.players.find((player) => player.id === localPlayerId) ??
-    effectSource.players[0] ??
-    selfPlayer;
-  const effectCamX = effectCameraPlayer.x - width / 2;
-  const effectCamY = effectCameraPlayer.y - height / 2;
+  const effectCameraPlayer = selectCameraPlayer(effectSource.players, preferredCameraId) ?? selfPlayer;
+  const effectCamX = effectCameraPlayer ? effectCameraPlayer.x - width / 2 : defaultCamX;
+  const effectCamY = effectCameraPlayer ? effectCameraPlayer.y - height / 2 : defaultCamY;
   if (effectSource.serverTime !== lastEffectsSyncedServerTime) {
     syncCombatEffects(effectSource, nowMs, effectCamX, effectCamY, width, height);
   }

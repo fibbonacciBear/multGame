@@ -117,11 +117,16 @@ type Config struct {
 	PassiveHealCombatDelay       time.Duration
 	BotDifficultyMode            string
 	BotDifficultyDistribution    string
+	BotDifficultyProfiles        string
+	BotDifficultyAdaptiveLow     string
+	BotDifficultyAdaptiveHigh    string
 	MatchDuration                time.Duration
 	RespawnDelay                 time.Duration
 	IntermissionDuration         time.Duration
 	DisconnectGracePeriod        time.Duration
 	BotFillDelay                 time.Duration
+	MaxSpectators                int
+	DebugSpectatorGracePeriod    time.Duration
 	RegistryHeartbeatInterval    time.Duration
 	RegistryHeartbeatTTL         time.Duration
 	LobbyTTL                     time.Duration
@@ -189,11 +194,16 @@ func LoadConfig() Config {
 		PassiveHealCombatDelay:       envDuration("PASSIVE_HEAL_COMBAT_DELAY", defaultPassiveHealDelay),
 		BotDifficultyMode:            envOrDefault("BOT_DIFFICULTY_MODE", "weighted"),
 		BotDifficultyDistribution:    envOrDefault("BOT_DIFFICULTY_DISTRIBUTION", "L0:10,L1:30,L2:40,L3:20"),
+		BotDifficultyProfiles:        os.Getenv("BOT_DIFFICULTY_PROFILES"),
+		BotDifficultyAdaptiveLow:     envOrDefault("BOT_DIFFICULTY_ADAPTIVE_LOW", string(BotLevelEvasive)),
+		BotDifficultyAdaptiveHigh:    envOrDefault("BOT_DIFFICULTY_ADAPTIVE_HIGH", string(BotLevelFull)),
 		MatchDuration:                envDuration("MATCH_DURATION", 5*time.Minute),
 		RespawnDelay:                 envDuration("RESPAWN_DELAY", 2*time.Second),
 		IntermissionDuration:         envDuration("INTERMISSION_DURATION", defaultIntermission),
 		DisconnectGracePeriod:        envDuration("DISCONNECT_GRACE_PERIOD", defaultDisconnectGrace),
 		BotFillDelay:                 envDuration("BOT_FILL_DELAY", 0),
+		MaxSpectators:                envInt("MAX_SPECTATORS", defaultMaxSpectators),
+		DebugSpectatorGracePeriod:    envDuration("DEBUG_SPECTATOR_GRACE_PERIOD", defaultDebugSpectatorGrace),
 		RegistryHeartbeatInterval:    envDuration("REGISTRY_HEARTBEAT_INTERVAL", 5*time.Second),
 		RegistryHeartbeatTTL:         registryHeartbeatTTL(),
 		LobbyTTL:                     envDuration("LOBBY_TTL", 330*time.Second),
@@ -208,14 +218,17 @@ type Server struct {
 	logger   *log.Logger
 	upgrader websocket.Upgrader
 
-	mu       sync.RWMutex
-	lobby    *Lobby
-	draining bool
+	mu         sync.RWMutex
+	lobby      *Lobby
+	spectators map[string]*ClientConnection
+	draining   bool
 
-	rng        *mathrand.Rand
-	httpClient *http.Client
-	redis      *redis.Client
-	lastTickAt atomic.Int64
+	rng         *mathrand.Rand
+	matchRNG    *mathrand.Rand
+	botProfiles map[BotLevel]botProfile
+	httpClient  *http.Client
+	redis       *redis.Client
+	lastTickAt  atomic.Int64
 }
 
 type LobbyPhase string
@@ -227,13 +240,17 @@ const (
 )
 
 type Lobby struct {
-	ID               string
-	MatchID          string
-	Phase            LobbyPhase
-	MatchStart       time.Time
-	MatchEnds        time.Time
-	IntermissionEnds time.Time
-	MatchOver        bool
+	ID                       string
+	MatchID                  string
+	MatchKind                MatchKind
+	Phase                    LobbyPhase
+	MatchStart               time.Time
+	MatchEnds                time.Time
+	IntermissionEnds         time.Time
+	MatchOver                bool
+	DebugSessionID           string
+	DebugBotCount            int
+	DebugSpectatorGraceUntil time.Time
 
 	Players     map[string]*Player
 	CrashPairs  map[string]time.Time
@@ -269,6 +286,8 @@ type Player struct {
 	BotTargetX             float64
 	BotTargetY             float64
 	BotRetargetAt          time.Time
+	BotLastProgressAt      time.Time
+	BotLastTargetDistance  float64
 	BotLevel               BotLevel
 	LastCombatAt           time.Time
 	PreDeathMass           float64
@@ -280,9 +299,12 @@ type Player struct {
 }
 
 type ClientConnection struct {
-	PlayerID string
-	Socket   *websocket.Conn
-	Mu       sync.Mutex
+	ViewerID       string
+	PlayerID       string
+	SessionMode    SessionMode
+	DebugSessionID string
+	Socket         *websocket.Conn
+	Mu             sync.Mutex
 }
 
 type Collectible struct {
@@ -321,17 +343,28 @@ type KillFeedEntry struct {
 }
 
 type matchClaims struct {
-	PlayerName string `json:"name"`
-	LobbyID    string `json:"lobby_id"`
-	PodIP      string `json:"pod_ip"`
+	PlayerName           string      `json:"name"`
+	LobbyID              string      `json:"lobby_id"`
+	PodIP                string      `json:"pod_ip"`
+	SessionMode          SessionMode `json:"session_mode"`
+	DebugSimulationStart bool        `json:"debug_simulation_start"`
+	DebugSessionID       string      `json:"debug_session_id"`
+	DebugBotCount        int         `json:"debug_bot_count"`
+	DebugSeed            *int64      `json:"debug_seed"`
 	jwt.RegisteredClaims
 }
 
 type welcomeMessage struct {
-	Type     string `json:"type"`
-	PlayerID string `json:"playerId"`
-	LobbyID  string `json:"lobbyId"`
-	MatchID  string `json:"matchId"`
+	Type           string      `json:"type"`
+	SessionMode    SessionMode `json:"sessionMode"`
+	ViewerID       string      `json:"viewerId"`
+	PlayerID       string      `json:"playerId,omitempty"`
+	LobbyID        string      `json:"lobbyId"`
+	MatchID        string      `json:"matchId"`
+	Phase          LobbyPhase  `json:"phase"`
+	MatchKind      MatchKind   `json:"matchKind"`
+	CameraTargetID string      `json:"cameraTargetId,omitempty"`
+	DebugSessionID string      `json:"debugSessionId,omitempty"`
 }
 
 type serverNoticeMessage struct {
@@ -344,6 +377,9 @@ type snapshotMessage struct {
 	ServerTime      int64              `json:"serverTime"`
 	World           worldBounds        `json:"world"`
 	MatchID         string             `json:"matchId"`
+	Phase           LobbyPhase         `json:"phase"`
+	MatchKind       MatchKind          `json:"matchKind"`
+	DebugSessionID  string             `json:"debugSessionId,omitempty"`
 	MatchOver       bool               `json:"matchOver"`
 	TimeRemainingMs int64              `json:"timeRemainingMs"`
 	IntermissionMs  int64              `json:"intermissionRemainingMs"`
@@ -438,6 +474,11 @@ type leaderboardPlayerHit struct {
 func NewServer(cfg Config, logger *log.Logger) *Server {
 	now := time.Now()
 	cfg = normalizeConfig(cfg)
+	botProfiles, err := loadBotProfiles(cfg.BotDifficultyProfiles)
+	if err != nil {
+		logger.Printf("invalid BOT_DIFFICULTY_PROFILES: %v; using built-in profiles", err)
+		botProfiles = defaultBotProfiles()
+	}
 
 	server := &Server{
 		cfg:    cfg,
@@ -448,14 +489,17 @@ func NewServer(cfg Config, logger *log.Logger) *Server {
 		lobby: &Lobby{
 			ID:         cfg.LobbyID,
 			MatchID:    randomID("match"),
+			MatchKind:  matchKindNormal,
 			Phase:      phaseIdle,
 			MatchOver:  true,
 			Players:    make(map[string]*Player),
 			CrashPairs: make(map[string]time.Time),
 			Objects:    make([]*Collectible, 0, cfg.NumObjects),
 		},
-		rng:        mathrand.New(mathrand.NewSource(time.Now().UnixNano())),
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		spectators:  make(map[string]*ClientConnection),
+		rng:         mathrand.New(mathrand.NewSource(time.Now().UnixNano())),
+		botProfiles: botProfiles,
+		httpClient:  &http.Client{Timeout: 5 * time.Second},
 	}
 	server.initRegistryClient()
 	server.lastTickAt.Store(now.UnixNano())
@@ -498,7 +542,7 @@ func (s *Server) HandleReadyz(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.draining || s.connectedHumansLocked() >= s.cfg.MaxPlayers {
+	if s.draining || s.connectedGameplayHumansLocked() >= s.cfg.MaxPlayers {
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -515,12 +559,13 @@ func (s *Server) updateGauges() {
 		if !player.IsBot && player.Connected {
 			humans++
 		}
-		if player.Alive {
+		if player.Alive && s.shouldCollectGameplayMetricsLocked() {
 			PlayerMass.Observe(player.Mass)
 		}
 	}
 	ActivePlayers.Set(float64(humans))
 	LobbyPlayerCount.Set(float64(total))
+	SpectatorConnections.Set(float64(s.connectedSpectatorsLocked()))
 }
 
 func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -542,6 +587,11 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
+	if strings.TrimSpace(claims.Subject) == "" {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+	mode := normalizeSessionMode(claims.SessionMode)
 
 	s.mu.Lock()
 	if s.draining {
@@ -549,9 +599,43 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server draining", http.StatusServiceUnavailable)
 		return
 	}
-	if !s.canAdmitHumanLocked(claims.Subject) {
+	switch mode {
+	case sessionModePlayer:
+		if s.lobby.MatchKind == matchKindDebugBotSim {
+			s.mu.Unlock()
+			http.Error(w, "debug simulation active", http.StatusServiceUnavailable)
+			return
+		}
+		if !s.canAdmitHumanLocked(claims.Subject) {
+			s.mu.Unlock()
+			http.Error(w, "lobby full", http.StatusServiceUnavailable)
+			return
+		}
+	case sessionModeSpectator:
+		if s.lobby.MatchKind == matchKindDebugBotSim {
+			s.mu.Unlock()
+			http.Error(w, "debug session unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !s.canAdmitSpectatorLocked(claims.Subject) {
+			s.mu.Unlock()
+			http.Error(w, "spectator lobby full", http.StatusServiceUnavailable)
+			return
+		}
+	case sessionModeDebugSimulation:
+		if claims.DebugSessionID == "" {
+			s.mu.Unlock()
+			http.Error(w, "debug session unavailable", http.StatusUnauthorized)
+			return
+		}
+		if !s.canAdmitSpectatorLocked(claims.Subject) {
+			s.mu.Unlock()
+			http.Error(w, "spectator lobby full", http.StatusServiceUnavailable)
+			return
+		}
+	default:
 		s.mu.Unlock()
-		http.Error(w, "lobby full", http.StatusServiceUnavailable)
+		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
 	s.mu.Unlock()
@@ -563,8 +647,11 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connection := &ClientConnection{
-		PlayerID: claims.Subject,
-		Socket:   socket,
+		ViewerID:       claims.Subject,
+		PlayerID:       claims.Subject,
+		SessionMode:    mode,
+		DebugSessionID: claims.DebugSessionID,
+		Socket:         socket,
 	}
 
 	s.mu.Lock()
@@ -574,24 +661,86 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 		s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "server draining")
 		return
 	}
-	if !s.canAdmitHumanLocked(claims.Subject) {
+	welcome := welcomeMessage{
+		Type:           "welcome",
+		SessionMode:    mode,
+		ViewerID:       connection.ViewerID,
+		LobbyID:        s.lobby.ID,
+		MatchID:        s.lobby.MatchID,
+		Phase:          s.lobby.Phase,
+		MatchKind:      s.lobby.MatchKind,
+		DebugSessionID: s.lobby.DebugSessionID,
+	}
+	switch mode {
+	case sessionModePlayer:
+		if s.lobby.MatchKind == matchKindDebugBotSim {
+			s.mu.Unlock()
+			s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "debug simulation active")
+			return
+		}
+		if !s.canAdmitHumanLocked(claims.Subject) {
+			s.mu.Unlock()
+			s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "lobby full")
+			return
+		}
+		s.clearDebugMatchStateLocked()
+		if s.lobby.Phase == phaseIdle {
+			s.resetMatchLocked(now)
+		}
+		player := s.upsertHumanPlayerLocked(claims.Subject, claims.PlayerName, connection, now)
+		connection.PlayerID = player.ID
+		welcome.PlayerID = player.ID
+		welcome.MatchID = s.lobby.MatchID
+		welcome.Phase = s.lobby.Phase
+		welcome.MatchKind = s.lobby.MatchKind
+		welcome.CameraTargetID = player.ID
+	case sessionModeSpectator:
+		if s.lobby.MatchKind == matchKindDebugBotSim {
+			s.mu.Unlock()
+			s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "debug session unavailable")
+			return
+		}
+		if !s.canAdmitSpectatorLocked(connection.ViewerID) {
+			s.mu.Unlock()
+			s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "spectator lobby full")
+			return
+		}
+		s.registerSpectatorLocked(connection)
+		welcome.CameraTargetID = s.chooseDefaultCameraTargetLocked(false)
+	case sessionModeDebugSimulation:
+		if !s.canAdmitSpectatorLocked(connection.ViewerID) {
+			s.mu.Unlock()
+			s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "spectator lobby full")
+			return
+		}
+		if claims.DebugSimulationStart {
+			if s.lobby.Phase != phaseIdle || s.lobby.MatchKind == matchKindDebugBotSim {
+				s.mu.Unlock()
+				s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "debug lobby unavailable")
+				return
+			}
+			s.startDebugMatchLocked(now, claims.DebugSessionID, claims.DebugBotCount, claims.DebugSeed)
+		} else if s.lobby.MatchKind != matchKindDebugBotSim || s.lobby.DebugSessionID != claims.DebugSessionID {
+			s.mu.Unlock()
+			s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "debug session unavailable")
+			return
+		}
+		s.registerSpectatorLocked(connection)
+		welcome.MatchID = s.lobby.MatchID
+		welcome.Phase = s.lobby.Phase
+		welcome.MatchKind = s.lobby.MatchKind
+		welcome.DebugSessionID = s.lobby.DebugSessionID
+		welcome.CameraTargetID = s.chooseDefaultCameraTargetLocked(true)
+	default:
 		s.mu.Unlock()
-		s.closeSocketWithReason(socket, websocket.CloseTryAgainLater, "lobby full")
+		s.closeSocketWithReason(socket, websocket.ClosePolicyViolation, "invalid session mode")
 		return
 	}
-	if s.lobby.Phase == phaseIdle {
-		s.resetMatchLocked(now)
-	}
-	player := s.upsertHumanPlayerLocked(claims.Subject, claims.PlayerName, connection, now)
 	s.mu.Unlock()
 	WSConnectionsOpened.Inc()
+	s.scheduleRegistryRefresh()
 
-	_ = connection.writeJSON(welcomeMessage{
-		Type:     "welcome",
-		PlayerID: player.ID,
-		LobbyID:  s.lobby.ID,
-		MatchID:  s.lobby.MatchID,
-	})
+	_ = connection.writeJSON(welcome)
 
 	go s.readLoop(connection)
 }
@@ -606,10 +755,10 @@ func (s *Server) BeginDrain(message string) {
 	if s.lobby.Phase == phaseIntermission {
 		s.lobby.IntermissionEnds = time.Time{}
 	}
-	if s.connectedHumansLocked() == 0 {
+	if s.connectedGameplayHumansLocked() == 0 {
 		s.markDrainCompleteLocked()
 	}
-	connections := s.currentConnectionsLocked()
+	connections := s.allConnectionsForNoticeCloseLocked()
 	s.mu.Unlock()
 
 	_ = s.markDraining(context.Background())
@@ -647,7 +796,7 @@ func (s *Server) CloseAllConnections() {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, connection := range s.currentConnectionsLocked() {
+	for _, connection := range s.allConnectionsForNoticeCloseLocked() {
 		_ = connection.Socket.Close()
 	}
 }
@@ -656,19 +805,36 @@ func (s *Server) readLoop(connection *ClientConnection) {
 	defer func() {
 		WSConnectionsClosed.Inc()
 		s.mu.Lock()
-		if player, ok := s.lobby.Players[connection.PlayerID]; ok {
-			if player.Connection == connection {
-				player.Connected = false
-				player.Connection = nil
-				player.DisconnectedAt = time.Now()
-				player.Input = InputState{}
+		now := time.Now()
+		if connection.SessionMode == sessionModePlayer {
+			if player, ok := s.lobby.Players[connection.PlayerID]; ok {
+				if player.Connection == connection {
+					player.Connected = false
+					player.Connection = nil
+					player.DisconnectedAt = now
+					player.Input = InputState{}
+				}
 			}
+		} else {
+			s.removeSpectatorLocked(connection, now)
 		}
 		s.mu.Unlock()
+		s.scheduleRegistryRefresh()
 		_ = connection.Socket.Close()
 	}()
 
 	for {
+		if connection.SessionMode != sessionModePlayer {
+			if _, _, err := connection.Socket.ReadMessage(); err != nil {
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+					s.logger.Printf("read failed for spectator %s: %v", connection.ViewerID, err)
+				}
+				return
+			}
+			WSMessagesReceived.Inc()
+			continue
+		}
+
 		var input InputState
 		if err := connection.Socket.ReadJSON(&input); err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
@@ -699,12 +865,24 @@ func (s *Server) step(now time.Time) {
 	defer s.mu.Unlock()
 
 	s.evictDisconnectedPlayersLocked(now)
-	if s.draining && s.connectedHumansLocked() == 0 {
+	s.syncDebugSpectatorGraceLocked(now)
+	if s.draining && s.connectedGameplayHumansLocked() == 0 {
 		s.markDrainCompleteLocked()
 		s.updateGauges()
 		return
 	}
-	if !s.draining && s.connectedHumansLocked() == 0 && (s.lobby.Phase == phaseActive || s.lobby.Phase == phaseIntermission) {
+	if s.lobby.MatchKind == matchKindDebugBotSim &&
+		s.connectedDebugSpectatorsLocked() == 0 &&
+		!s.lobby.DebugSpectatorGraceUntil.IsZero() &&
+		!now.Before(s.lobby.DebugSpectatorGraceUntil) {
+		s.transitionToIdleLocked()
+		s.updateGauges()
+		return
+	}
+	if !s.draining &&
+		s.connectedGameplayHumansLocked() == 0 &&
+		(s.lobby.Phase == phaseActive || s.lobby.Phase == phaseIntermission) &&
+		!s.shouldKeepObservedSessionAliveLocked(now) {
 		s.transitionToIdleLocked()
 		s.updateGauges()
 		return
@@ -723,7 +901,9 @@ func (s *Server) step(now time.Time) {
 		if now.After(s.lobby.MatchEnds) {
 			scoreboard := s.scoreboardLocked()
 			s.finishMatchLocked(now)
-			go s.reportLeaderboard(scoreboard)
+			if s.lobby.MatchKind != matchKindDebugBotSim {
+				go s.reportLeaderboard(scoreboard)
+			}
 			if s.draining {
 				s.lobby.IntermissionEnds = time.Time{}
 			}
@@ -731,7 +911,14 @@ func (s *Server) step(now time.Time) {
 		s.handleRespawnsLocked(now)
 	case phaseIntermission:
 		if !s.draining && !s.lobby.IntermissionEnds.IsZero() && !now.Before(s.lobby.IntermissionEnds) {
-			s.resetMatchLocked(now)
+			if s.connectedGameplayHumansLocked() > 0 {
+				if s.lobby.MatchKind != matchKindDebugBotSim {
+					s.clearDebugMatchStateLocked()
+				}
+				s.resetMatchLocked(now)
+			} else {
+				s.transitionToIdleLocked()
+			}
 		}
 	}
 
@@ -748,7 +935,7 @@ func (s *Server) broadcastSnapshots(now time.Time) {
 	defer func() { SnapshotBroadcastDuration.Observe(time.Since(broadcastStart).Seconds()) }()
 
 	s.mu.RLock()
-	deliveries := make([]snapshotDelivery, 0, len(s.lobby.Players))
+	deliveries := make([]snapshotDelivery, 0, len(s.lobby.Players)+len(s.spectators))
 	for _, player := range s.lobby.Players {
 		if player.Connected && player.Connection != nil {
 			deliveries = append(deliveries, snapshotDelivery{
@@ -757,6 +944,11 @@ func (s *Server) broadcastSnapshots(now time.Time) {
 			})
 		}
 	}
+	for _, connection := range s.spectators {
+		deliveries = append(deliveries, snapshotDelivery{
+			connection: connection,
+		})
+	}
 
 	scoreboard := s.scoreboardLocked()
 	messageBase := snapshotMessage{
@@ -764,6 +956,9 @@ func (s *Server) broadcastSnapshots(now time.Time) {
 		ServerTime:      now.UnixMilli(),
 		World:           worldBounds{Width: s.cfg.WorldWidth, Height: s.cfg.WorldHeight},
 		MatchID:         s.lobby.MatchID,
+		Phase:           s.lobby.Phase,
+		MatchKind:       s.lobby.MatchKind,
+		DebugSessionID:  s.lobby.DebugSessionID,
 		MatchOver:       s.lobby.MatchOver,
 		TimeRemainingMs: s.matchTimeRemainingLocked(now),
 		IntermissionMs:  s.intermissionRemainingLocked(now),
@@ -788,6 +983,11 @@ func (s *Server) broadcastSnapshots(now time.Time) {
 }
 
 func (s *Server) fillBotsLocked(now time.Time) {
+	if s.lobby.MatchKind == matchKindDebugBotSim {
+		s.maintainDebugBotCountLocked(now)
+		return
+	}
+
 	humans := 0
 	total := 0
 	for _, player := range s.lobby.Players {
@@ -870,7 +1070,10 @@ func (s *Server) finishMatchLocked(now time.Time) {
 	s.lobby.Phase = phaseIntermission
 	s.lobby.MatchOver = true
 	s.lobby.IntermissionEnds = now.Add(s.cfg.IntermissionDuration)
-	MatchesCompleted.Inc()
+	if s.lobby.MatchKind != matchKindDebugBotSim {
+		MatchesCompleted.Inc()
+	}
+	s.scheduleRegistryRefresh()
 }
 
 func (s *Server) reportLeaderboard(results []scoreboardResult) {
@@ -918,23 +1121,11 @@ func (s *Server) reportLeaderboard(results []scoreboardResult) {
 }
 
 func (s *Server) currentConnectionsLocked() []*ClientConnection {
-	connections := make([]*ClientConnection, 0)
-	for _, player := range s.lobby.Players {
-		if player.Connection != nil && player.Connected {
-			connections = append(connections, player.Connection)
-		}
-	}
-	return connections
+	return s.allConnectionsForNoticeCloseLocked()
 }
 
 func (s *Server) connectedHumansLocked() int {
-	humans := 0
-	for _, player := range s.lobby.Players {
-		if !player.IsBot && player.Connected {
-			humans++
-		}
-	}
-	return humans
+	return s.connectedGameplayHumansLocked()
 }
 
 func (s *Server) activeSlotsLocked() int {
@@ -948,11 +1139,14 @@ func (s *Server) activeSlotsLocked() int {
 }
 
 func (s *Server) canAdmitHumanLocked(id string) bool {
+	if s.lobby.MatchKind == matchKindDebugBotSim {
+		return false
+	}
 	player, ok := s.lobby.Players[id]
 	if ok && !player.IsBot {
 		return true
 	}
-	return s.connectedHumansLocked() < s.cfg.MaxPlayers
+	return s.connectedGameplayHumansLocked() < s.cfg.MaxPlayers
 }
 
 func (s *Server) closeSocketWithReason(socket *websocket.Conn, code int, reason string) {
@@ -1029,22 +1223,26 @@ func (s *Server) transitionToIdleLocked() {
 	s.lobby.CrashPairs = make(map[string]time.Time)
 	s.lobby.KillFeed = s.lobby.KillFeed[:0]
 	s.lobby.Objects = s.lobby.Objects[:0]
+	s.clearDebugMatchStateLocked()
 
 	for id, player := range s.lobby.Players {
 		if player.IsBot || !player.Connected {
 			delete(s.lobby.Players, id)
 		}
 	}
+	s.scheduleRegistryRefresh()
 }
 
 func (s *Server) markDrainCompleteLocked() {
-	if s.connectedHumansLocked() == 0 {
+	if s.connectedGameplayHumansLocked() == 0 {
 		s.lobby.Phase = phaseIdle
+		s.clearDebugMatchStateLocked()
 	} else {
 		s.lobby.Phase = phaseIntermission
 	}
 	s.lobby.MatchOver = true
 	s.lobby.IntermissionEnds = time.Time{}
+	s.scheduleRegistryRefresh()
 }
 
 func (s *Server) spawnObjectsLocked() {
@@ -1114,7 +1312,9 @@ func (s *Server) killPlayerLocked(player *Player, killer *Player, reason string,
 	player.DeathReason = reason
 	player.SpawnInvulnerableUntil = time.Time{}
 	player.PendingSpawnSeparation = false
-	PlayerKills.Inc()
+	if s.shouldCollectGameplayMetricsLocked() {
+		PlayerKills.Inc()
+	}
 	if killer != nil {
 		player.KilledBy = killer.Name
 		s.lobby.KillFeed = append([]KillFeedEntry{{
@@ -1130,6 +1330,10 @@ func (s *Server) killPlayerLocked(player *Player, killer *Player, reason string,
 }
 
 func (s *Server) resetMatchLocked(now time.Time) {
+	s.lobby.MatchKind = normalizeMatchKind(s.lobby.MatchKind)
+	if s.lobby.MatchKind != matchKindDebugBotSim {
+		s.clearDebugMatchStateLocked()
+	}
 	s.lobby.MatchID = randomID("match")
 	s.lobby.Phase = phaseActive
 	s.lobby.MatchStart = now
@@ -1160,6 +1364,7 @@ func (s *Server) resetMatchLocked(now time.Time) {
 		usedFallback := s.spawnPlayerAtRandomPositionLocked(player)
 		s.applySpawnSafetyLocked(player, now, usedFallback)
 	}
+	s.scheduleRegistryRefresh()
 }
 
 func (s *Server) scoreboardLocked() []scoreboardResult {
@@ -1214,6 +1419,18 @@ func (s *Server) snapshotPlayersLocked(now time.Time) []snapshotPlayer {
 			Color:         player.Color,
 		})
 	}
+	sort.Slice(players, func(i, j int) bool {
+		if players[i].IsBot != players[j].IsBot {
+			return !players[i].IsBot
+		}
+		if players[i].IsAlive != players[j].IsAlive {
+			return players[i].IsAlive
+		}
+		if players[i].Name != players[j].Name {
+			return players[i].Name < players[j].Name
+		}
+		return players[i].ID < players[j].ID
+	})
 	return players
 }
 
@@ -1298,6 +1515,7 @@ func (s *Server) parseToken(tokenString, expectedLobby string) (*matchClaims, er
 	if claims.PodIP != "" && s.cfg.PodIP != "" && claims.PodIP != s.cfg.PodIP {
 		return nil, fmt.Errorf("unexpected pod")
 	}
+	claims.SessionMode = normalizeSessionMode(claims.SessionMode)
 	return claims, nil
 }
 
@@ -1339,15 +1557,15 @@ func clamp(value, min, max float64) float64 {
 }
 
 func (s *Server) randFloat(min, max float64) float64 {
-	return min + s.rng.Float64()*(max-min)
+	return min + s.rngLocked().Float64()*(max-min)
 }
 
 func (s *Server) randomColor() string {
-	return palette[s.rng.Intn(len(palette))]
+	return palette[s.randomIntnLocked(len(palette))]
 }
 
 func (s *Server) randomSpriteVariant() int {
-	return int(s.rng.Int31())
+	return int(s.randomInt31Locked())
 }
 
 func maxInt64(value, min int64) int64 {
@@ -1479,11 +1697,23 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.BotDifficultyDistribution == "" {
 		cfg.BotDifficultyDistribution = "L0:10,L1:30,L2:40,L3:20"
 	}
+	if cfg.BotDifficultyAdaptiveLow == "" {
+		cfg.BotDifficultyAdaptiveLow = string(BotLevelEvasive)
+	}
+	if cfg.BotDifficultyAdaptiveHigh == "" {
+		cfg.BotDifficultyAdaptiveHigh = string(BotLevelFull)
+	}
 	if cfg.IntermissionDuration <= 0 {
 		cfg.IntermissionDuration = defaultIntermission
 	}
 	if cfg.DisconnectGracePeriod <= 0 {
 		cfg.DisconnectGracePeriod = defaultDisconnectGrace
+	}
+	if cfg.MaxSpectators <= 0 {
+		cfg.MaxSpectators = defaultMaxSpectators
+	}
+	if cfg.DebugSpectatorGracePeriod <= 0 {
+		cfg.DebugSpectatorGracePeriod = defaultDebugSpectatorGrace
 	}
 
 	return cfg

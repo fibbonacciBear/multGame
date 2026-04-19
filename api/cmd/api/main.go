@@ -35,6 +35,8 @@ func main() {
 	mux.HandleFunc("/healthz", server.HandleHealthz)
 	mux.HandleFunc("/api/matchmaking/config", server.HandleMatchmakingConfig)
 	mux.HandleFunc("/api/matchmaking/join", server.HandleJoin)
+	mux.HandleFunc("/api/matchmaking/spectate", server.HandleSpectate)
+	mux.HandleFunc("/api/matchmaking/debug-simulate", server.HandleDebugSimulate)
 	mux.HandleFunc("/api/leaderboard", server.HandleLeaderboard)
 	mux.HandleFunc("/api/leaderboard/report", server.HandleLeaderboardReport)
 	mux.Handle("/metrics", promhttp.Handler())

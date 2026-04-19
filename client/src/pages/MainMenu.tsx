@@ -1,4 +1,4 @@
-import { CSSProperties, FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import type { MatchJoinResponse } from "../engine/types";
@@ -6,6 +6,8 @@ import type { MatchJoinResponse } from "../engine/types";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const DEFAULT_PLAYER_NAME = "Pilot";
 const AVAILABLE_REGIONS = [{ value: "local", label: "Local" }];
+const FRONTEND_SPECTATOR_MODE_ENABLED =
+  String(import.meta.env.VITE_SPECTATOR_MODE_ENABLED ?? "false").toLowerCase() === "true";
 const DEFAULT_STAR_SEED = (import.meta.env.VITE_MENU_STAR_SEED as string | undefined)?.trim();
 const STAR_SEED_QUERY_PARAM = "starSeed";
 const AMBIENT_STAR_COLORS = [
@@ -86,7 +88,11 @@ export default function MainMenu() {
   const [region, setRegion] = useState("local");
   const [isRegionMenuOpen, setIsRegionMenuOpen] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [joinAction, setJoinAction] = useState<"player" | "spectator" | "debug_simulation">("player");
   const [error, setError] = useState<string>();
+  const [observerSecret, setObserverSecret] = useState("");
+  const [debugBotCount, setDebugBotCount] = useState("8");
+  const [debugSeed, setDebugSeed] = useState("");
   const [isNameFocused, setIsNameFocused] = useState(false);
   const [hasRangeSelection, setHasRangeSelection] = useState(false);
   const [caretIndex, setCaretIndex] = useState(playerName.length);
@@ -160,33 +166,115 @@ export default function MainMenu() {
     resetCursorBlink();
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function requestMatchAssignment(
+    path: string,
+    payload: Record<string, unknown>,
+  ): Promise<MatchJoinResponse> {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const message = (await response.text()).trim();
+      throw new Error(message || "Join request failed.");
+    }
+
+    return (await response.json()) as MatchJoinResponse;
+  }
+
+  function parseDebugSeed() {
+    const trimmed = debugSeed.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  async function handlePlayerJoin() {
     setIsJoining(true);
+    setJoinAction("player");
     setError(undefined);
 
     try {
       const trimmedName = playerName.trim().slice(0, 18);
       const submittedName = trimmedName || DEFAULT_PLAYER_NAME;
-
-      const response = await fetch(`${API_BASE_URL}/api/matchmaking/join`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ playerName: submittedName, region }),
+      const match = await requestMatchAssignment("/api/matchmaking/join", {
+        playerName: submittedName,
+        region,
       });
-
-      if (!response.ok) {
-        throw new Error("Join request failed.");
-      }
-
-      const match = (await response.json()) as MatchJoinResponse;
       localStorage.setItem("multgame.playerName", submittedName);
       setStoredPlayerName(submittedName);
-      navigate("/game", { state: { match } });
+      navigate("/game", {
+        state: {
+          match,
+          refresh: {
+            sessionMode: "player",
+            region,
+            playerName: submittedName,
+          },
+        },
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to join a match.");
+    } finally {
+      setIsJoining(false);
+    }
+  }
+
+  async function handleObserverJoin(mode: "spectator" | "debug_simulation") {
+    setIsJoining(true);
+    setJoinAction(mode);
+    setError(undefined);
+
+    try {
+      if (mode === "spectator") {
+        const match = await requestMatchAssignment("/api/matchmaking/spectate", {
+          region,
+          secret: observerSecret,
+        });
+        navigate("/game", {
+          state: {
+            match,
+            refresh: {
+              sessionMode: "spectator",
+              region,
+              secret: observerSecret,
+              lobbyId: match.lobbyId,
+            },
+          },
+        });
+        return;
+      }
+
+      const botCount = Math.max(1, Math.round(Number(debugBotCount) || 1));
+      const seed = parseDebugSeed();
+      const match = await requestMatchAssignment("/api/matchmaking/debug-simulate", {
+        region,
+        secret: observerSecret,
+        botCount,
+        seed,
+      });
+      navigate("/game", {
+        state: {
+          match,
+          refresh: {
+            sessionMode: "debug_simulation",
+            region,
+            secret: observerSecret,
+            botCount,
+            seed,
+            lobbyId: match.lobbyId,
+            debugSessionId: match.debugSessionId,
+          },
+        },
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to start observer mode.");
     } finally {
       setIsJoining(false);
     }
@@ -217,7 +305,8 @@ export default function MainMenu() {
         <form
           className="form-stack"
           onSubmit={(event) => {
-            void handleSubmit(event);
+            event.preventDefault();
+            void handlePlayerJoin();
           }}
         >
           <label className="stack">
@@ -262,11 +351,55 @@ export default function MainMenu() {
 
           <div className="form-actions">
             <button type="submit" disabled={isJoining}>
-              {isJoining ? "Linking..." : "Drift"}
+              {isJoining && joinAction === "player" ? "Linking..." : "Drift"}
             </button>
           </div>
-          {error ? <p className="danger">{error}</p> : null}
         </form>
+        {FRONTEND_SPECTATOR_MODE_ENABLED ? (
+          <div className="form-stack" style={{ marginTop: "1rem" }}>
+            <span className="field-label">Observer Tools</span>
+            <label className="stack">
+              <span className="field-label">Observer Secret</span>
+              <input
+                type="password"
+                placeholder="admin/debug secret"
+                value={observerSecret}
+                onChange={(event) => setObserverSecret(event.target.value)}
+              />
+            </label>
+            <label className="stack">
+              <span className="field-label">Debug Bot Count</span>
+              <input
+                inputMode="numeric"
+                placeholder="8"
+                value={debugBotCount}
+                onChange={(event) => setDebugBotCount(event.target.value)}
+              />
+            </label>
+            <label className="stack">
+              <span className="field-label">Debug Seed (optional)</span>
+              <input
+                inputMode="numeric"
+                placeholder="deterministic seed"
+                value={debugSeed}
+                onChange={(event) => setDebugSeed(event.target.value)}
+              />
+            </label>
+            <div className="form-actions">
+              <button type="button" disabled={isJoining} onClick={() => void handleObserverJoin("spectator")}>
+                {isJoining && joinAction === "spectator" ? "Linking..." : "Spectate"}
+              </button>
+              <button
+                type="button"
+                disabled={isJoining}
+                onClick={() => void handleObserverJoin("debug_simulation")}
+              >
+                {isJoining && joinAction === "debug_simulation" ? "Launching..." : "Debug Sim"}
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {error ? <p className="danger">{error}</p> : null}
         <div className="menu-footer-meta">
           <span>cockpit sync: nominal</span>
           <span>build v0.1.0</span>

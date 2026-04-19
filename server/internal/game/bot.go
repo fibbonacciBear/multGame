@@ -1,6 +1,7 @@
 package game
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -16,6 +17,239 @@ const (
 	BotLevelFull         BotLevel = "L3"
 )
 
+type botBehavior string
+
+const (
+	botBehaviorWander  botBehavior = "wander"
+	botBehaviorEvasive botBehavior = "evasive"
+	botBehaviorCombat  botBehavior = "combat"
+)
+
+const (
+	botWanderTimeout           = 3 * time.Second
+	botWanderStallWindow       = 1100 * time.Millisecond
+	botWanderCandidateAttempts = 8
+)
+
+type botProfile struct {
+	ID                     BotLevel
+	Behavior               botBehavior
+	CanShoot               bool
+	AvoidBorders           bool
+	ThreatRadius           float64
+	AimNoise               float64
+	MoveNoise              float64
+	BorderMargin           float64
+	WanderInset            float64
+	InputStrength          float64
+	FleeMassRatio          float64
+	AimMassRatio           float64
+	ShootRange             float64
+	FinishHealthPct        float64
+	CollectibleMinDistance float64
+}
+
+type botProfileConfig struct {
+	Behavior               *string  `json:"behavior"`
+	CanShoot               *bool    `json:"canShoot"`
+	AvoidBorders           *bool    `json:"avoidBorders"`
+	ThreatRadius           *float64 `json:"threatRadius"`
+	AimNoise               *float64 `json:"aimNoise"`
+	MoveNoise              *float64 `json:"moveNoise"`
+	BorderMargin           *float64 `json:"borderMargin"`
+	WanderInset            *float64 `json:"wanderInset"`
+	InputStrength          *float64 `json:"inputStrength"`
+	FleeMassRatio          *float64 `json:"fleeMassRatio"`
+	AimMassRatio           *float64 `json:"aimMassRatio"`
+	ShootRange             *float64 `json:"shootRange"`
+	FinishHealthPct        *float64 `json:"finishHealthPct"`
+	CollectibleMinDistance *float64 `json:"collectibleMinDistance"`
+}
+
+func defaultBotProfiles() map[BotLevel]botProfile {
+	return map[BotLevel]botProfile{
+		BotLevelDummy: normalizeBotProfile(botProfile{
+			ID:          BotLevelDummy,
+			Behavior:    botBehaviorWander,
+			WanderInset: 200,
+		}),
+		BotLevelEvasive: normalizeBotProfile(botProfile{
+			ID:           BotLevelEvasive,
+			Behavior:     botBehaviorEvasive,
+			AvoidBorders: true,
+			ThreatRadius: 550,
+			BorderMargin: 220,
+			WanderInset:  220,
+		}),
+		BotLevelNoviceCombat: normalizeBotProfile(botProfile{
+			ID:                     BotLevelNoviceCombat,
+			Behavior:               botBehaviorCombat,
+			CanShoot:               true,
+			AvoidBorders:           true,
+			AimNoise:               0.18,
+			MoveNoise:              0.16,
+			BorderMargin:           220,
+			WanderInset:            220,
+			ThreatRadius:           550,
+			FleeMassRatio:          1.2,
+			AimMassRatio:           1.15,
+			ShootRange:             700,
+			FinishHealthPct:        0.45,
+			CollectibleMinDistance: 260,
+		}),
+		BotLevelFull: normalizeBotProfile(botProfile{
+			ID:                     BotLevelFull,
+			Behavior:               botBehaviorCombat,
+			CanShoot:               true,
+			AvoidBorders:           true,
+			AimNoise:               0.05,
+			MoveNoise:              0,
+			BorderMargin:           220,
+			WanderInset:            220,
+			ThreatRadius:           550,
+			FleeMassRatio:          1.2,
+			AimMassRatio:           1.15,
+			ShootRange:             700,
+			FinishHealthPct:        0.45,
+			CollectibleMinDistance: 260,
+		}),
+	}
+}
+
+func genericBotProfile(id BotLevel) botProfile {
+	return normalizeBotProfile(botProfile{
+		ID:                     id,
+		WanderInset:            200,
+		ThreatRadius:           550,
+		BorderMargin:           220,
+		InputStrength:          0.9,
+		FleeMassRatio:          1.2,
+		AimMassRatio:           1.15,
+		ShootRange:             700,
+		FinishHealthPct:        0.45,
+		CollectibleMinDistance: 260,
+	})
+}
+
+func normalizeBotProfile(profile botProfile) botProfile {
+	if profile.ThreatRadius <= 0 {
+		profile.ThreatRadius = 550
+	}
+	if profile.BorderMargin <= 0 {
+		profile.BorderMargin = 220
+	}
+	if profile.InputStrength <= 0 {
+		profile.InputStrength = 0.9
+	}
+	if profile.FleeMassRatio <= 0 {
+		profile.FleeMassRatio = 1.2
+	}
+	if profile.AimMassRatio <= 0 {
+		profile.AimMassRatio = 1.15
+	}
+	if profile.ShootRange <= 0 {
+		profile.ShootRange = 700
+	}
+	if profile.FinishHealthPct <= 0 {
+		profile.FinishHealthPct = 0.45
+	}
+	if profile.CollectibleMinDistance <= 0 {
+		profile.CollectibleMinDistance = 260
+	}
+	if profile.WanderInset <= 0 {
+		profile.WanderInset = 200
+		if profile.AvoidBorders {
+			profile.WanderInset = profile.BorderMargin
+		}
+	}
+	return profile
+}
+
+func loadBotProfiles(raw string) (map[BotLevel]botProfile, error) {
+	profiles := defaultBotProfiles()
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return profiles, nil
+	}
+
+	var overrides map[string]botProfileConfig
+	if err := json.Unmarshal([]byte(raw), &overrides); err != nil {
+		return nil, err
+	}
+
+	for idText, override := range overrides {
+		id := BotLevel(strings.TrimSpace(idText))
+		if id == "" {
+			return nil, fmt.Errorf("empty bot profile id")
+		}
+		base, exists := profiles[id]
+		if !exists {
+			base = genericBotProfile(id)
+		}
+		profile, err := applyBotProfileConfig(base, override, !exists)
+		if err != nil {
+			return nil, fmt.Errorf("profile %q: %w", id, err)
+		}
+		profiles[id] = profile
+	}
+	return profiles, nil
+}
+
+func applyBotProfileConfig(base botProfile, cfg botProfileConfig, requireBehavior bool) (botProfile, error) {
+	if cfg.Behavior != nil {
+		base.Behavior = botBehavior(strings.ToLower(strings.TrimSpace(*cfg.Behavior)))
+	}
+	if cfg.CanShoot != nil {
+		base.CanShoot = *cfg.CanShoot
+	}
+	if cfg.AvoidBorders != nil {
+		base.AvoidBorders = *cfg.AvoidBorders
+	}
+	if cfg.ThreatRadius != nil {
+		base.ThreatRadius = *cfg.ThreatRadius
+	}
+	if cfg.AimNoise != nil {
+		base.AimNoise = *cfg.AimNoise
+	}
+	if cfg.MoveNoise != nil {
+		base.MoveNoise = *cfg.MoveNoise
+	}
+	if cfg.BorderMargin != nil {
+		base.BorderMargin = *cfg.BorderMargin
+	}
+	if cfg.WanderInset != nil {
+		base.WanderInset = *cfg.WanderInset
+	}
+	if cfg.InputStrength != nil {
+		base.InputStrength = *cfg.InputStrength
+	}
+	if cfg.FleeMassRatio != nil {
+		base.FleeMassRatio = *cfg.FleeMassRatio
+	}
+	if cfg.AimMassRatio != nil {
+		base.AimMassRatio = *cfg.AimMassRatio
+	}
+	if cfg.ShootRange != nil {
+		base.ShootRange = *cfg.ShootRange
+	}
+	if cfg.FinishHealthPct != nil {
+		base.FinishHealthPct = *cfg.FinishHealthPct
+	}
+	if cfg.CollectibleMinDistance != nil {
+		base.CollectibleMinDistance = *cfg.CollectibleMinDistance
+	}
+
+	if requireBehavior && base.Behavior == "" {
+		return botProfile{}, fmt.Errorf("behavior is required for new profiles")
+	}
+	switch base.Behavior {
+	case botBehaviorWander, botBehaviorEvasive, botBehaviorCombat:
+	default:
+		return botProfile{}, fmt.Errorf("unsupported behavior %q", base.Behavior)
+	}
+	return normalizeBotProfile(base), nil
+}
+
 func (s *Server) updateBotsLocked(now time.Time) {
 	livePlayers := make([]*Player, 0, len(s.lobby.Players))
 	for _, player := range s.lobby.Players {
@@ -29,99 +263,287 @@ func (s *Server) updateBotsLocked(now time.Time) {
 			continue
 		}
 
+		profile := s.botProfileForLocked(player.BotLevel)
+		s.ensureBotWanderTargetLocked(player, profile, now)
 		target, distance := s.closestTargetLocked(player, livePlayers)
 		object := s.bestCollectibleLocked(player)
-		if target == nil || now.After(player.BotRetargetAt) {
-			player.BotTargetX = s.randFloat(200, s.cfg.WorldWidth-200)
-			player.BotTargetY = s.randFloat(200, s.cfg.WorldHeight-200)
-			player.BotRetargetAt = now.Add(1500 * time.Millisecond)
-		}
 
-		targetX := player.BotTargetX
-		targetY := player.BotTargetY
-		shoot := false
-
-		switch player.BotLevel {
-		case BotLevelDummy:
-			// Keep dummies moving but otherwise harmless.
+		targetX, targetY, shoot, usingWander := s.botDecisionLocked(player, profile, target, object, distance, now)
+		if usingWander && s.shouldRetargetBotWanderLocked(player, profile, now) {
+			s.retargetBotLocked(player, profile, now)
 			targetX = player.BotTargetX
 			targetY = player.BotTargetY
-		case BotLevelEvasive:
-			if target != nil && distance < 550 {
-				targetX = player.X - (target.X - player.X)
-				targetY = player.Y - (target.Y - player.Y)
-			} else if object != nil {
-				targetX = object.X
-				targetY = object.Y
-			}
-		case BotLevelNoviceCombat:
-			targetX, targetY, shoot = s.botCombatDecisionLocked(player, target, object, distance, 0.18, now)
-		default:
-			targetX, targetY, shoot = s.botCombatDecisionLocked(player, target, object, distance, 0.05, now)
 		}
-
-		angle := math.Atan2(targetY-player.Y, targetX-player.X)
-		if player.BotLevel == BotLevelNoviceCombat {
-			angle += s.randFloat(-0.16, 0.16)
-		}
+		targetX, targetY = s.applyBotBorderAvoidanceLocked(player, profile, targetX, targetY)
+		angle := s.botSteeringAngleLocked(player, profile, targetX, targetY)
 		player.Input = InputState{
 			Angle:    angle,
-			Strength: 0.9,
-			Shoot:    shoot && !s.isInvulnerable(player, now),
+			Strength: profile.InputStrength,
+			Shoot:    shoot && profile.CanShoot && !s.isInvulnerable(player, now),
 		}
 	}
 }
 
-func (s *Server) botCombatDecisionLocked(
+func (s *Server) ensureBotWanderTargetLocked(player *Player, profile botProfile, now time.Time) {
+	if player.BotRetargetAt.IsZero() {
+		s.retargetBotLocked(player, profile, now)
+		return
+	}
+	if profile.Behavior != botBehaviorWander && now.After(player.BotRetargetAt) {
+		s.retargetBotLocked(player, profile, now)
+	}
+}
+
+func (s *Server) shouldRetargetBotWanderLocked(player *Player, profile botProfile, now time.Time) bool {
+	distance := math.Hypot(player.BotTargetX-player.X, player.BotTargetY-player.Y)
+	if distance <= s.botWanderArrivalRadiusLocked(player) {
+		return true
+	}
+	if profile.Behavior == botBehaviorWander {
+		return false
+	}
+
+	if player.BotLastProgressAt.IsZero() || player.BotLastTargetDistance <= 0 {
+		player.BotLastProgressAt = now
+		player.BotLastTargetDistance = distance
+		return false
+	}
+
+	if distance <= player.BotLastTargetDistance-s.botWanderProgressThresholdLocked(player) {
+		player.BotLastProgressAt = now
+		player.BotLastTargetDistance = distance
+		return false
+	}
+
+	return now.Sub(player.BotLastProgressAt) >= botWanderStallWindow
+}
+
+func (s *Server) botWanderArrivalRadiusLocked(player *Player) float64 {
+	return math.Max(s.radiusForMass(player.Mass)*2, 45)
+}
+
+func (s *Server) botWanderProgressThresholdLocked(player *Player) float64 {
+	return math.Max(s.radiusForMass(player.Mass)*0.8, 24)
+}
+
+func (s *Server) botMinimumWanderDistanceLocked(player *Player, profile botProfile) float64 {
+	return math.Max(math.Max(profile.BorderMargin*1.1, 240), s.radiusForMass(player.Mass)*10)
+}
+
+func (s *Server) retargetBotLocked(player *Player, profile botProfile, now time.Time) {
+	player.BotTargetX, player.BotTargetY = s.randomBotWanderTargetLocked(player, profile)
+	player.BotRetargetAt = now.Add(botWanderTimeout)
+	player.BotLastProgressAt = now
+	player.BotLastTargetDistance = math.Hypot(player.BotTargetX-player.X, player.BotTargetY-player.Y)
+}
+
+func (s *Server) randomBotWanderTargetLocked(player *Player, profile botProfile) (float64, float64) {
+	radius := s.radiusForMass(player.Mass)
+	inset := math.Max(profile.WanderInset, radius)
+	minX := clamp(inset, radius, s.cfg.WorldWidth-radius)
+	maxX := clamp(s.cfg.WorldWidth-inset, radius, s.cfg.WorldWidth-radius)
+	minY := clamp(inset, radius, s.cfg.WorldHeight-radius)
+	maxY := clamp(s.cfg.WorldHeight-inset, radius, s.cfg.WorldHeight-radius)
+	if minX > maxX {
+		minX, maxX = radius, s.cfg.WorldWidth-radius
+	}
+	if minY > maxY {
+		minY, maxY = radius, s.cfg.WorldHeight-radius
+	}
+
+	minDistance := s.botMinimumWanderDistanceLocked(player, profile)
+	bestX, bestY := s.randFloat(minX, maxX), s.randFloat(minY, maxY)
+	bestDistance := math.Hypot(bestX-player.X, bestY-player.Y)
+	for attempt := 1; attempt < botWanderCandidateAttempts; attempt++ {
+		candidateX := s.randFloat(minX, maxX)
+		candidateY := s.randFloat(minY, maxY)
+		distance := math.Hypot(candidateX-player.X, candidateY-player.Y)
+		if distance > bestDistance {
+			bestX, bestY = candidateX, candidateY
+			bestDistance = distance
+		}
+		if distance >= minDistance {
+			return candidateX, candidateY
+		}
+	}
+	return bestX, bestY
+}
+
+func (s *Server) botDecisionLocked(
 	player *Player,
+	profile botProfile,
 	target *Player,
 	object *Collectible,
 	distance float64,
-	aimNoise float64,
 	now time.Time,
-) (float64, float64, bool) {
+) (float64, float64, bool, bool) {
+	switch profile.Behavior {
+	case botBehaviorWander:
+		return player.BotTargetX, player.BotTargetY, false, true
+	case botBehaviorEvasive:
+		return s.botEvasiveDecisionLocked(player, profile, target, object, distance)
+	case botBehaviorCombat:
+		return s.botCombatDecisionLocked(player, profile, target, object, distance, now)
+	default:
+		return player.BotTargetX, player.BotTargetY, false, true
+	}
+}
+
+func (s *Server) botEvasiveDecisionLocked(
+	player *Player,
+	profile botProfile,
+	target *Player,
+	object *Collectible,
+	distance float64,
+) (float64, float64, bool, bool) {
+	targetX := player.BotTargetX
+	targetY := player.BotTargetY
+	if target != nil && distance < profile.ThreatRadius {
+		targetX, targetY = mirroredTarget(player, target)
+		return targetX, targetY, false, false
+	}
+	if object != nil {
+		return object.X, object.Y, false, false
+	}
+	return targetX, targetY, false, true
+}
+
+func mirroredTarget(player *Player, target *Player) (float64, float64) {
+	return player.X - (target.X - player.X), player.Y - (target.Y - player.Y)
+}
+
+func (s *Server) botSteeringAngleLocked(player *Player, profile botProfile, targetX, targetY float64) float64 {
+	dx := targetX - player.X
+	dy := targetY - player.Y
+	if math.Hypot(dx, dy) < 1 {
+		dx = s.cfg.WorldWidth/2 - player.X
+		dy = s.cfg.WorldHeight/2 - player.Y
+	}
+	angle := math.Atan2(dy, dx)
+	if profile.MoveNoise > 0 {
+		angle += s.randFloat(-profile.MoveNoise, profile.MoveNoise)
+	}
+	return angle
+}
+
+func (s *Server) applyBotBorderAvoidanceLocked(player *Player, profile botProfile, targetX, targetY float64) (float64, float64) {
+	if !profile.AvoidBorders || profile.BorderMargin <= 0 {
+		return targetX, targetY
+	}
+
+	radius := s.radiusForMass(player.Mass)
+	minX := radius + profile.BorderMargin
+	maxX := s.cfg.WorldWidth - radius - profile.BorderMargin
+	minY := radius + profile.BorderMargin
+	maxY := s.cfg.WorldHeight - radius - profile.BorderMargin
+	if minX > maxX {
+		minX, maxX = radius, s.cfg.WorldWidth-radius
+	}
+	if minY > maxY {
+		minY, maxY = radius, s.cfg.WorldHeight-radius
+	}
+
+	safeTargetX := clamp(targetX, minX, maxX)
+	safeTargetY := clamp(targetY, minY, maxY)
+	escapeX := clamp(player.X, minX, maxX)
+	escapeY := clamp(player.Y, minY, maxY)
+
+	pressureX := 0.0
+	if player.X < minX {
+		pressureX = (minX - player.X) / profile.BorderMargin
+	} else if player.X > maxX {
+		pressureX = (player.X - maxX) / profile.BorderMargin
+	}
+	pressureY := 0.0
+	if player.Y < minY {
+		pressureY = (minY - player.Y) / profile.BorderMargin
+	} else if player.Y > maxY {
+		pressureY = (player.Y - maxY) / profile.BorderMargin
+	}
+
+	pressure := clamp(math.Hypot(pressureX, pressureY), 0, 1)
+	adjustedX := lerp(safeTargetX, escapeX, pressure)
+	adjustedY := lerp(safeTargetY, escapeY, pressure)
+	if math.Hypot(adjustedX-player.X, adjustedY-player.Y) >= 1 {
+		return adjustedX, adjustedY
+	}
+
+	centerX := s.cfg.WorldWidth / 2
+	centerY := s.cfg.WorldHeight / 2
+	if pressure > 0 {
+		return lerp(safeTargetX, centerX, pressure), lerp(safeTargetY, centerY, pressure)
+	}
+	return safeTargetX, safeTargetY
+}
+
+func lerp(start, end, amount float64) float64 {
+	return start + (end-start)*amount
+}
+
+func (s *Server) botCombatDecisionLocked(
+	player *Player,
+	profile botProfile,
+	target *Player,
+	object *Collectible,
+	distance float64,
+	now time.Time,
+) (float64, float64, bool, bool) {
 	targetX := player.BotTargetX
 	targetY := player.BotTargetY
 	shoot := false
+	usingWander := true
 
 	if object != nil {
 		targetX = object.X
 		targetY = object.Y
+		usingWander = false
 	}
 
 	if target == nil {
-		return targetX, targetY, false
+		return targetX, targetY, false, usingWander
 	}
 
 	projectedCrashDamage := s.crashDamageForPlayer(player)
-	if projectedCrashDamage >= player.Health || target.Mass > player.Mass*1.2 {
-		targetX = player.X - (target.X - player.X)
-		targetY = player.Y - (target.Y - player.Y)
-		return targetX, targetY, false
+	if projectedCrashDamage >= player.Health || target.Mass > player.Mass*profile.FleeMassRatio {
+		targetX, targetY = mirroredTarget(player, target)
+		return targetX, targetY, false, false
 	}
 
-	if !s.isCrashPairOnCooldown(player.ID, target.ID, now) && target.Health < s.maxHealthForMass(target.Mass)*0.45 {
+	if !s.isCrashPairOnCooldown(player.ID, target.ID, now) && target.Health < s.maxHealthForMass(target.Mass)*profile.FinishHealthPct {
 		targetX = target.X
 		targetY = target.Y
+		usingWander = false
 	}
 
-	if target.Mass <= player.Mass*1.15 {
-		targetX = target.X + s.randFloat(-aimNoise, aimNoise)*distance
-		targetY = target.Y + s.randFloat(-aimNoise, aimNoise)*distance
-		shoot = distance < 700
+	if target.Mass <= player.Mass*profile.AimMassRatio {
+		targetX = target.X + s.randFloat(-profile.AimNoise, profile.AimNoise)*distance
+		targetY = target.Y + s.randFloat(-profile.AimNoise, profile.AimNoise)*distance
+		shoot = distance < profile.ShootRange
+		usingWander = false
 	}
 
 	if object != nil {
 		objectScore := object.Mass / math.Max(math.Hypot(object.X-player.X, object.Y-player.Y), 120)
 		targetScore := s.killMassTransfer(target.Mass) / math.Max(distance, 120)
-		if objectScore > targetScore && distance > 260 {
+		if objectScore > targetScore && distance > profile.CollectibleMinDistance {
 			targetX = object.X
 			targetY = object.Y
 			shoot = false
+			usingWander = false
 		}
 	}
 
-	return targetX, targetY, shoot
+	return targetX, targetY, shoot, usingWander
+}
+
+func (s *Server) botProfileForLocked(level BotLevel) botProfile {
+	if profile, ok := s.botProfiles[level]; ok {
+		return profile
+	}
+	if profile, ok := s.botProfiles[BotLevelFull]; ok {
+		return profile
+	}
+	return defaultBotProfiles()[BotLevelFull]
 }
 
 func (s *Server) bestCollectibleLocked(player *Player) *Collectible {
@@ -157,7 +579,7 @@ func (s *Server) closestTargetLocked(source *Player, players []*Player) (*Player
 func (s *Server) newBotLocked(now time.Time) *Player {
 	bot := &Player{
 		ID:            randomID("bot"),
-		Name:          fmt.Sprintf("Bot-%02d", s.rng.Intn(90)+10),
+		Name:          fmt.Sprintf("Bot-%02d", s.randomIntnLocked(90)+10),
 		Color:         s.randomColor(),
 		SpriteVariant: s.randomSpriteVariant(),
 		IsBot:         true,
@@ -176,7 +598,7 @@ func (s *Server) newBotLocked(now time.Time) *Player {
 func (s *Server) chooseBotLevelLocked() BotLevel {
 	switch strings.ToLower(strings.TrimSpace(s.cfg.BotDifficultyMode)) {
 	case "fixed":
-		return parseFixedBotLevel(s.cfg.BotDifficultyDistribution)
+		return s.parseFixedBotLevel(s.cfg.BotDifficultyDistribution)
 	case "adaptive":
 		connectedHumans := 0
 		for _, player := range s.lobby.Players {
@@ -185,10 +607,10 @@ func (s *Server) chooseBotLevelLocked() BotLevel {
 			}
 		}
 		if connectedHumans <= 1 {
-			return BotLevelEvasive
+			return s.parseFixedBotLevel(s.cfg.BotDifficultyAdaptiveLow)
 		}
 		if connectedHumans >= 4 {
-			return BotLevelFull
+			return s.parseFixedBotLevel(s.cfg.BotDifficultyAdaptiveHigh)
 		}
 		return s.chooseWeightedBotLevel(s.cfg.BotDifficultyDistribution)
 	default:
@@ -196,13 +618,15 @@ func (s *Server) chooseBotLevelLocked() BotLevel {
 	}
 }
 
-func parseFixedBotLevel(value string) BotLevel {
-	switch BotLevel(strings.TrimSpace(value)) {
-	case BotLevelDummy, BotLevelEvasive, BotLevelNoviceCombat, BotLevelFull:
-		return BotLevel(strings.TrimSpace(value))
-	default:
+func (s *Server) parseFixedBotLevel(value string) BotLevel {
+	level := BotLevel(strings.TrimSpace(value))
+	if level == "" {
 		return BotLevelFull
 	}
+	if _, ok := s.botProfiles[level]; ok {
+		return level
+	}
+	return BotLevelFull
 }
 
 func (s *Server) chooseWeightedBotLevel(distribution string) BotLevel {
@@ -211,7 +635,7 @@ func (s *Server) chooseWeightedBotLevel(distribution string) BotLevel {
 		weight int
 	}
 
-	options := make([]weightedLevel, 0, 4)
+	options := make([]weightedLevel, 0, len(s.botProfiles))
 	totalWeight := 0
 	for _, part := range strings.Split(distribution, ",") {
 		part = strings.TrimSpace(part)
@@ -222,7 +646,10 @@ func (s *Server) chooseWeightedBotLevel(distribution string) BotLevel {
 		if len(sides) != 2 {
 			continue
 		}
-		level := parseFixedBotLevel(sides[0])
+		level := BotLevel(strings.TrimSpace(sides[0]))
+		if _, ok := s.botProfiles[level]; !ok {
+			continue
+		}
 		weight := envIntFromString(strings.TrimSpace(sides[1]), 0)
 		if weight <= 0 {
 			continue
@@ -234,7 +661,7 @@ func (s *Server) chooseWeightedBotLevel(distribution string) BotLevel {
 		return BotLevelFull
 	}
 
-	roll := s.rng.Intn(totalWeight)
+	roll := s.randomIntnLocked(totalWeight)
 	running := 0
 	for _, option := range options {
 		running += option.weight
