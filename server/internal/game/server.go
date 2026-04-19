@@ -1123,14 +1123,6 @@ func (s *Server) reportLeaderboard(results []scoreboardResult) {
 	}
 }
 
-func (s *Server) currentConnectionsLocked() []*ClientConnection {
-	return s.allConnectionsForNoticeCloseLocked()
-}
-
-func (s *Server) connectedHumansLocked() int {
-	return s.connectedGameplayHumansLocked()
-}
-
 func (s *Server) activeSlotsLocked() int {
 	total := 0
 	for _, player := range s.lobby.Players {
