@@ -139,7 +139,9 @@ func (s *Server) handleMatchMetricsReport(w http.ResponseWriter, r *http.Request
 		}
 		MatchMetricsReports.WithLabelValues(matchMetricsStatusInternalError).Inc()
 		MatchMetricsWriteFailures.Inc()
-		s.logger.Printf("match metrics write failed: %v", err)
+		if s.logger != nil {
+			s.logger.Printf("match metrics write failed: %v", err)
+		}
 		http.Error(w, "failed to persist match metrics", http.StatusInternalServerError)
 		return
 	}
