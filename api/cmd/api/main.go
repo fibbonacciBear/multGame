@@ -39,6 +39,7 @@ func main() {
 	mux.HandleFunc("/api/matchmaking/debug-simulate", server.HandleDebugSimulate)
 	mux.HandleFunc("/api/leaderboard", server.HandleLeaderboard)
 	mux.HandleFunc("/api/leaderboard/report", server.HandleLeaderboardReport)
+	mux.HandleFunc("/api/match-metrics/report", server.HandleMatchMetricsReport)
 	mux.Handle("/metrics", promhttp.Handler())
 
 	httpServer := &http.Server{

@@ -13,6 +13,7 @@ secretGenerator:
     literals:
       - JWT_SECRET=replace-me
       - REPORT_SHARED_SECRET=replace-me
+      - SPECTATOR_ADMIN_SECRET=replace-me
   - name: redis-secrets
     literals:
       - REDIS_PASSWORD=replace-me

@@ -17,6 +17,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -39,6 +40,15 @@ type Config struct {
 	RegistryCleanupInterval time.Duration
 	SpectatorModeEnabled    bool
 	SpectatorAdminSecret    string
+	MatchAnalyticsEnabled   bool
+	DatabaseURL             string
+	DBMaxOpenConns          int
+	DBMaxIdleConns          int
+	DBConnMaxLifetime       time.Duration
+	DBQueryTimeout          time.Duration
+	MatchMetricsMaxBytes    int64
+	MatchMetricsMaxPlayers  int
+	MatchMetricsMaxEvents   int
 }
 
 type sessionMode string
@@ -85,9 +95,12 @@ type debugSimulatePayload struct {
 }
 
 type Server struct {
-	cfg    Config
-	logger *log.Logger
-	redis  *redis.Client
+	cfg                 Config
+	logger              *log.Logger
+	redis               *redis.Client
+	matchMetricsStore   matchMetricsStore
+	matchMetricsStoreMu sync.RWMutex
+	matchMetricsInitMu  sync.Mutex
 }
 
 type leaderboardEntry struct {
@@ -124,6 +137,15 @@ func LoadConfig() Config {
 		RegistryCleanupInterval: envDuration("REGISTRY_CLEANUP_INTERVAL", 15*time.Second),
 		SpectatorModeEnabled:    envBool("SPECTATOR_MODE_ENABLED", false),
 		SpectatorAdminSecret:    os.Getenv("SPECTATOR_ADMIN_SECRET"),
+		MatchAnalyticsEnabled:   envBool("MATCH_ANALYTICS_ENABLED", false),
+		DatabaseURL:             os.Getenv("DATABASE_URL"),
+		DBMaxOpenConns:          envInt("DATABASE_MAX_OPEN_CONNS", 5),
+		DBMaxIdleConns:          envInt("DATABASE_MAX_IDLE_CONNS", 2),
+		DBConnMaxLifetime:       envDuration("DATABASE_CONN_MAX_LIFETIME", 30*time.Minute),
+		DBQueryTimeout:          envDuration("DATABASE_QUERY_TIMEOUT", 3*time.Second),
+		MatchMetricsMaxBytes:    envInt64("MATCH_METRICS_MAX_BYTES", 1<<20),
+		MatchMetricsMaxPlayers:  envInt("MATCH_METRICS_MAX_PLAYERS", 128),
+		MatchMetricsMaxEvents:   envInt("MATCH_METRICS_MAX_EVENTS", 4096),
 	}
 }
 
@@ -143,8 +165,19 @@ func NewServer(ctx context.Context, cfg Config, logger *log.Logger) (*Server, er
 		logger: logger,
 		redis:  client,
 	}
+	if cfg.MatchAnalyticsEnabled {
+		server.initializeMatchMetricsStore(ctx, "startup")
+	}
 	go server.startRegistryCleanup(ctx)
 	return server, nil
+}
+
+func (s *Server) initializeMatchMetricsStore(ctx context.Context, source string) {
+	if _, err := s.ensureMatchMetricsStore(ctx); err != nil {
+		if s.logger != nil {
+			s.logger.Printf("match analytics postgres unavailable during %s; API will stay up and metrics ingestion will return 503 until storage connects: %v", source, err)
+		}
+	}
 }
 
 func (s *Server) WithCORS(next http.Handler) http.Handler {
@@ -161,7 +194,23 @@ func (s *Server) WithCORS(next http.Handler) http.Handler {
 }
 
 func (s *Server) HandleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	payload := map[string]string{"status": "ok"}
+	if s.cfg.MatchAnalyticsEnabled {
+		payload["matchAnalyticsStore"] = s.matchMetricsStoreStatus()
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (s *Server) matchMetricsStoreStatus() string {
+	if !s.cfg.MatchAnalyticsEnabled {
+		return "disabled"
+	}
+	s.matchMetricsStoreMu.RLock()
+	defer s.matchMetricsStoreMu.RUnlock()
+	if s.matchMetricsStore == nil {
+		return "unavailable"
+	}
+	return "available"
 }
 
 func (s *Server) HandleJoin(w http.ResponseWriter, r *http.Request) {
@@ -443,6 +492,10 @@ func (s *Server) HandleLeaderboardReport(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stored"})
 }
 
+func (s *Server) HandleMatchMetricsReport(w http.ResponseWriter, r *http.Request) {
+	s.handleMatchMetricsReport(w, r)
+}
+
 func leaderboardEntryKey(member string) string {
 	return fmt.Sprintf("leaderboard:entry:%s", member)
 }
@@ -537,6 +590,18 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return envIntValue(value, fallback)
+}
+
+func envInt64(key string, fallback int64) int64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func envIntValue(value string, fallback int) int {

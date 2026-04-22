@@ -10,6 +10,7 @@ secretGenerator:
     literals:
       - JWT_SECRET=dev-secret
       - REPORT_SHARED_SECRET=dev-report-secret
+      - SPECTATOR_ADMIN_SECRET=dev-spectator-secret
   - name: redis-secrets
     literals:
       - REDIS_PASSWORD=

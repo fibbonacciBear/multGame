@@ -132,6 +132,9 @@ type Config struct {
 	LobbyTTL                     time.Duration
 	HealthTickThreshold          time.Duration
 	ShutdownDrainTimeout         time.Duration
+	MatchAnalyticsEnabled        bool
+	MatchAnalyticsReportRetries  int
+	MatchAnalyticsRetryDelay     time.Duration
 }
 
 func LoadConfig() Config {
@@ -209,6 +212,9 @@ func LoadConfig() Config {
 		LobbyTTL:                     envDuration("LOBBY_TTL", 330*time.Second),
 		HealthTickThreshold:          envDuration("HEALTH_TICK_THRESHOLD", 2*time.Second),
 		ShutdownDrainTimeout:         envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
+		MatchAnalyticsEnabled:        envBool("MATCH_ANALYTICS_ENABLED", false),
+		MatchAnalyticsReportRetries:  envInt("MATCH_ANALYTICS_REPORT_RETRIES", 2),
+		MatchAnalyticsRetryDelay:     envDuration("MATCH_ANALYTICS_RETRY_DELAY", 500*time.Millisecond),
 	}
 	return normalizeConfig(cfg)
 }
@@ -223,12 +229,13 @@ type Server struct {
 	spectators map[string]*ClientConnection
 	draining   bool
 
-	rng         *mathrand.Rand
-	matchRNG    *mathrand.Rand
-	botProfiles map[BotLevel]botProfile
-	httpClient  *http.Client
-	redis       *redis.Client
-	lastTickAt  atomic.Int64
+	rng          *mathrand.Rand
+	matchRNG     *mathrand.Rand
+	botProfiles  map[BotLevel]botProfile
+	httpClient   *http.Client
+	redis        *redis.Client
+	lastTickAt   atomic.Int64
+	matchMetrics *MatchMetricsCollector
 }
 
 type LobbyPhase string
@@ -691,6 +698,7 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 			s.resetMatchLocked(now)
 		}
 		player := s.upsertHumanPlayerLocked(claims.Subject, claims.PlayerName, connection, now)
+		s.registerMatchParticipantLocked(player, now)
 		connection.PlayerID = player.ID
 		welcome.PlayerID = player.ID
 		welcome.MatchID = s.lobby.MatchID
@@ -759,7 +767,7 @@ func (s *Server) BeginDrain(message string) {
 		s.lobby.IntermissionEnds = time.Time{}
 	}
 	if s.connectedGameplayHumansLocked() == 0 {
-		s.markDrainCompleteLocked()
+		s.markDrainCompleteLocked(time.Now())
 	}
 	connections := s.allConnectionsForNoticeCloseLocked()
 	s.mu.Unlock()
@@ -812,6 +820,9 @@ func (s *Server) readLoop(connection *ClientConnection) {
 		if connection.SessionMode == sessionModePlayer {
 			if player, ok := s.lobby.Players[connection.PlayerID]; ok {
 				if player.Connection == connection {
+					if s.matchMetrics != nil {
+						s.matchMetrics.OnDisconnect(player, now)
+					}
 					player.Connected = false
 					player.Connection = nil
 					player.DisconnectedAt = now
@@ -870,7 +881,7 @@ func (s *Server) step(now time.Time) {
 	s.evictDisconnectedPlayersLocked(now)
 	s.syncDebugSpectatorGraceLocked(now)
 	if s.draining && s.connectedGameplayHumansLocked() == 0 {
-		s.markDrainCompleteLocked()
+		s.markDrainCompleteLocked(now)
 		s.updateGauges()
 		return
 	}
@@ -878,6 +889,7 @@ func (s *Server) step(now time.Time) {
 		s.connectedDebugSpectatorsLocked() == 0 &&
 		!s.lobby.DebugSpectatorGraceUntil.IsZero() &&
 		!now.Before(s.lobby.DebugSpectatorGraceUntil) {
+		s.finalizeMatchAnalyticsLocked(matchEndReasonDebugAbandoned, now, false)
 		s.transitionToIdleLocked()
 		s.updateGauges()
 		return
@@ -886,6 +898,7 @@ func (s *Server) step(now time.Time) {
 		s.connectedGameplayHumansLocked() == 0 &&
 		(s.lobby.Phase == phaseActive || s.lobby.Phase == phaseIntermission) &&
 		!s.shouldKeepObservedSessionAliveLocked(now) {
+		s.finalizeMatchAnalyticsLocked(matchEndReasonNoHumans, now, false)
 		s.transitionToIdleLocked()
 		s.updateGauges()
 		return
@@ -903,6 +916,8 @@ func (s *Server) step(now time.Time) {
 		s.applyPassiveHealingLocked(now)
 		if now.After(s.lobby.MatchEnds) {
 			scoreboard := s.scoreboardLocked()
+			s.sampleMatchAnalyticsLocked(now)
+			s.finalizeMatchAnalyticsLocked(matchEndReasonTimeLimit, now, s.draining)
 			s.finishMatchLocked(now)
 			if s.lobby.MatchKind != matchKindDebugBotSim {
 				go s.reportLeaderboard(scoreboard)
@@ -912,6 +927,7 @@ func (s *Server) step(now time.Time) {
 			}
 		}
 		s.handleRespawnsLocked(now)
+		s.sampleMatchAnalyticsLocked(now)
 	case phaseIntermission:
 		if !s.draining && !s.lobby.IntermissionEnds.IsZero() && !now.Before(s.lobby.IntermissionEnds) {
 			if s.connectedGameplayHumansLocked() > 0 {
@@ -920,6 +936,7 @@ func (s *Server) step(now time.Time) {
 				}
 				s.resetMatchLocked(now)
 			} else {
+				s.finalizeMatchAnalyticsLocked(matchEndReasonNoHumans, now, false)
 				s.transitionToIdleLocked()
 			}
 		}
@@ -1011,6 +1028,7 @@ func (s *Server) fillBotsLocked(now time.Time) {
 	for total < s.cfg.MaxPlayers {
 		bot := s.newBotLocked(now)
 		s.lobby.Players[bot.ID] = bot
+		s.registerMatchParticipantLocked(bot, now)
 		total++
 	}
 }
@@ -1228,7 +1246,8 @@ func (s *Server) transitionToIdleLocked() {
 	s.scheduleRegistryRefresh()
 }
 
-func (s *Server) markDrainCompleteLocked() {
+func (s *Server) markDrainCompleteLocked(now time.Time) {
+	s.finalizeMatchAnalyticsLocked(matchEndReasonDrain, now, true)
 	if s.connectedGameplayHumansLocked() == 0 {
 		s.lobby.Phase = phaseIdle
 		s.clearDebugMatchStateLocked()
@@ -1262,6 +1281,9 @@ func (s *Server) spawnProjectileLocked(player *Player, now time.Time) {
 		ExpiresAt: now.Add(s.cfg.ProjectileTTL),
 	}
 	s.lobby.Projectiles = append(s.lobby.Projectiles, shot)
+	if s.matchMetrics != nil {
+		s.matchMetrics.OnShot(player, now)
+	}
 }
 
 func (s *Server) applySpawnSafetyLocked(player *Player, now time.Time, usedFallback bool) {
@@ -1296,6 +1318,9 @@ func (s *Server) killPlayerLocked(player *Player, killer *Player, reason string,
 
 	if reason == "" {
 		reason = "destroyed"
+	}
+	if s.matchMetrics != nil {
+		s.matchMetrics.OnKill(player, killer, reason, now)
 	}
 
 	player.Alive = false
@@ -1339,6 +1364,7 @@ func (s *Server) resetMatchLocked(now time.Time) {
 	s.lobby.CrashPairs = make(map[string]time.Time)
 	s.lobby.KillFeed = s.lobby.KillFeed[:0]
 	s.spawnObjectsLocked()
+	s.beginMatchAnalyticsLocked(now)
 
 	for id, player := range s.lobby.Players {
 		if player.IsBot || !player.Connected {
@@ -1358,6 +1384,7 @@ func (s *Server) resetMatchLocked(now time.Time) {
 		player.VY = 0
 		usedFallback := s.spawnPlayerAtRandomPositionLocked(player)
 		s.applySpawnSafetyLocked(player, now, usedFallback)
+		s.registerMatchParticipantLocked(player, now)
 	}
 	s.scheduleRegistryRefresh()
 }
@@ -1710,6 +1737,12 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.DebugSpectatorGracePeriod <= 0 {
 		cfg.DebugSpectatorGracePeriod = defaultDebugSpectatorGrace
 	}
+	if cfg.MatchAnalyticsReportRetries < 0 {
+		cfg.MatchAnalyticsReportRetries = 0
+	}
+	if cfg.MatchAnalyticsRetryDelay <= 0 {
+		cfg.MatchAnalyticsRetryDelay = 500 * time.Millisecond
+	}
 
 	return cfg
 }
@@ -1755,4 +1788,19 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

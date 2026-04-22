@@ -217,6 +217,7 @@ func (s *Server) maintainDebugBotCountLocked(now time.Time) {
 	for len(botIDs) < target {
 		bot := s.newBotLocked(now)
 		s.lobby.Players[bot.ID] = bot
+		s.registerMatchParticipantLocked(bot, now)
 		botIDs = append(botIDs, bot.ID)
 	}
 }

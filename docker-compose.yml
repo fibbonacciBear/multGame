@@ -4,6 +4,22 @@ services:
     ports:
       - "6379:6379"
 
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: multgame
+      POSTGRES_USER: multgame
+      POSTGRES_PASSWORD: multgame
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U multgame -d multgame"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   api-server:
     build:
       context: ./api
@@ -16,10 +32,28 @@ services:
       LOBBY_ID: local-lobby
       SPECTATOR_MODE_ENABLED: "true"
       SPECTATOR_ADMIN_SECRET: dev-spectator-secret
+      MATCH_ANALYTICS_ENABLED: "false"
+      DATABASE_URL: postgres://multgame:multgame@postgres:5432/multgame?sslmode=disable
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     ports:
       - "8081:8081"
+
+  api-migrate:
+    build:
+      context: ./api
+    command: ["/usr/local/bin/migrate"]
+    entrypoint: []
+    profiles:
+      - tools
+    environment:
+      DATABASE_URL: postgres://multgame:multgame@postgres:5432/multgame?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   game-server:
     build:
@@ -35,6 +69,7 @@ services:
       REPORT_SHARED_SECRET: dev-report-secret
       API_SERVER_URL: http://api-server:8081
       LOBBY_ID: local-lobby
+      MATCH_ANALYTICS_ENABLED: "false"
     depends_on:
       - api-server
     ports:
@@ -52,3 +87,6 @@ services:
       - game-server
     ports:
       - "5173:80"
+
+volumes:
+  postgres-data:

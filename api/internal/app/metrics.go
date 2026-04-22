@@ -40,6 +40,32 @@ var (
 		Help: "Total leaderboard report (write) requests.",
 	})
 
+	MatchMetricsReports = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "api_match_metrics_reports_total",
+		Help: "Total match metrics report ingestion outcomes.",
+	}, []string{"status"})
+
+	MatchMetricsWriteFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "api_match_metrics_write_failures_total",
+		Help: "Total Postgres transaction failures while persisting match metrics.",
+	})
+
+	MatchMetricsDuplicates = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "api_match_metrics_duplicate_total",
+		Help: "Total duplicate match metrics report outcomes.",
+	}, []string{"result"})
+
+	MatchMetricsWriteDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "api_match_metrics_write_duration_seconds",
+		Help:    "Duration of match metrics transactional persistence.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	MatchMetricsStoreAvailable = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "api_match_metrics_store_available",
+		Help: "Whether the match metrics Postgres store is currently available to the API.",
+	})
+
 	RedisErrors = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "api_redis_errors_total",
 		Help: "Total Redis operation errors.",
@@ -54,6 +80,11 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		MatchmakingInFlight,
 		LeaderboardReads,
 		LeaderboardWrites,
+		MatchMetricsReports,
+		MatchMetricsWriteFailures,
+		MatchMetricsDuplicates,
+		MatchMetricsWriteDuration,
+		MatchMetricsStoreAvailable,
 		RedisErrors,
 	)
 }
@@ -95,6 +126,8 @@ func normalizePath(p string) string {
 		return "/api/leaderboard"
 	case p == "/api/leaderboard/report":
 		return "/api/leaderboard/report"
+	case p == "/api/match-metrics/report":
+		return "/api/match-metrics/report"
 	case p == "/metrics":
 		return "/metrics"
 	default:

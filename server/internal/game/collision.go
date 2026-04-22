@@ -49,6 +49,9 @@ func (s *Server) resolveObjectCollisionsLocked(now time.Time) {
 			massGain, healthGain := s.applyCollectiblePickup(player, object.Mass)
 			pickupMassGain += massGain
 			pickupHealthGain += healthGain
+			if s.matchMetrics != nil {
+				s.matchMetrics.OnPickup(player, massGain, healthGain, now)
+			}
 			s.lobby.Objects[index] = s.spawnObjectLocked()
 			playerRadius = s.radiusForMass(player.Mass)
 		}
@@ -337,6 +340,9 @@ func (s *Server) handleRespawnsLocked(now time.Time) {
 
 		usedFallback := s.spawnPlayerAtRandomPositionLocked(player)
 		s.applySpawnSafetyLocked(player, now, usedFallback)
+		if s.matchMetrics != nil {
+			s.matchMetrics.OnRespawn(player, now)
+		}
 	}
 }
 

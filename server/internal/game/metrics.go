@@ -70,6 +70,16 @@ var (
 		Name: "game_spectator_connections",
 		Help: "Connected spectator/debug observer sessions.",
 	})
+
+	MatchMetricsReportsSent = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "game_match_metrics_reports_sent_total",
+		Help: "Total match metrics reports accepted by the API.",
+	})
+
+	MatchMetricsReportsDropped = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "game_match_metrics_reports_dropped_total",
+		Help: "Total match metrics reports dropped after permanent failure or retry exhaustion.",
+	})
 )
 
 func RegisterMetrics(reg prometheus.Registerer) {
@@ -87,5 +97,7 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		MatchesCompleted,
 		LobbyPlayerCount,
 		SpectatorConnections,
+		MatchMetricsReportsSent,
+		MatchMetricsReportsDropped,
 	)
 }
