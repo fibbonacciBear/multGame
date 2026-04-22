@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -116,6 +117,17 @@ func TestHandleMatchMetricsReportRejectsConflictWithoutRetryStatus(t *testing.T)
 	}
 }
 
+func TestDuplicateStatusTreatsMissingStoredRowAsConflict(t *testing.T) {
+	status, err := duplicateStatusFromStoredHash("", "payload-hash", sql.ErrNoRows)
+
+	if !errors.Is(err, errMatchMetricsConflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+	if status != "" {
+		t.Fatalf("status = %q, want empty status on conflict", status)
+	}
+}
+
 func TestHandleMatchMetricsReportRejectsUnsignedPayload(t *testing.T) {
 	server := &Server{
 		cfg: Config{
@@ -161,6 +173,31 @@ func TestHandleMatchMetricsReportRejectsOversizedPayload(t *testing.T) {
 
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestHandleMatchMetricsReportWriteFailureDoesNotRequireLogger(t *testing.T) {
+	server := &Server{
+		cfg: Config{
+			ReportSecret:           "test-secret",
+			MatchAnalyticsEnabled:  true,
+			MatchMetricsMaxBytes:   1 << 20,
+			MatchMetricsMaxPlayers: 10,
+			MatchMetricsMaxEvents:  10,
+			DBQueryTimeout:         time.Second,
+		},
+		matchMetricsStore: &fakeMatchMetricsStore{err: errors.New("postgres write failed")},
+	}
+
+	body := mustMatchMetricsBody(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/match-metrics/report", strings.NewReader(string(body)))
+	request.Header.Set("X-Report-Signature", signPayload(body, "test-secret"))
+	recorder := httptest.NewRecorder()
+
+	server.HandleMatchMetricsReport(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
 	}
 }
 

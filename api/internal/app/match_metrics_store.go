@@ -228,8 +228,16 @@ func (s *postgresMatchMetricsStore) duplicateStatus(
 	payloadHash string,
 ) (string, error) {
 	var storedHash string
-	if err := tx.QueryRowContext(ctx, `SELECT payload_hash FROM match_reports WHERE match_id = $1`, matchID).Scan(&storedHash); err != nil {
-		return "", err
+	err := tx.QueryRowContext(ctx, `SELECT payload_hash FROM match_reports WHERE match_id = $1`, matchID).Scan(&storedHash)
+	return duplicateStatusFromStoredHash(storedHash, payloadHash, err)
+}
+
+func duplicateStatusFromStoredHash(storedHash, payloadHash string, scanErr error) (string, error) {
+	if scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return "", errMatchMetricsConflict
+		}
+		return "", scanErr
 	}
 	if storedHash != payloadHash {
 		return "", errMatchMetricsConflict

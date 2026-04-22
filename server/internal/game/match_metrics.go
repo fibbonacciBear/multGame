@@ -57,6 +57,7 @@ type matchMetricsParticipant struct {
 type matchMetricsEvent struct {
 	TimestampMs         int64          `json:"tsMs"`
 	EventSeq            int64          `json:"eventSeq"`
+	Tick                *int64         `json:"tick,omitempty"`
 	EventType           string         `json:"eventType"`
 	ActorParticipantID  string         `json:"actorParticipantId,omitempty"`
 	TargetParticipantID string         `json:"targetParticipantId,omitempty"`
@@ -68,6 +69,7 @@ type MatchMetricsCollector struct {
 	lobbyID        string
 	matchKind      MatchKind
 	startedAt      time.Time
+	tickRate       int
 	configSnapshot map[string]any
 
 	finalized            bool
@@ -121,6 +123,7 @@ func newMatchMetricsCollector(lobby *Lobby, cfg Config, now time.Time) *MatchMet
 		lobbyID:              lobby.ID,
 		matchKind:            lobby.MatchKind,
 		startedAt:            now,
+		tickRate:             cfg.TickRate,
 		configSnapshot:       matchMetricsConfigSnapshot(cfg),
 		participantsByPlayer: make(map[string]*matchParticipantMetrics),
 	}
@@ -507,6 +510,7 @@ func (c *MatchMetricsCollector) addEvent(now time.Time, eventType, actorID, targ
 	c.events = append(c.events, matchMetricsEvent{
 		TimestampMs:         c.elapsedMs(now),
 		EventSeq:            c.nextEventSeq,
+		Tick:                c.tickAt(now),
 		EventType:           eventType,
 		ActorParticipantID:  actorID,
 		TargetParticipantID: targetID,
@@ -516,6 +520,14 @@ func (c *MatchMetricsCollector) addEvent(now time.Time, eventType, actorID, targ
 
 func (c *MatchMetricsCollector) elapsedMs(now time.Time) int64 {
 	return maxDurationMs(now.Sub(c.startedAt))
+}
+
+func (c *MatchMetricsCollector) tickAt(now time.Time) *int64 {
+	if c.tickRate <= 0 {
+		return nil
+	}
+	tick := c.elapsedMs(now) * int64(c.tickRate) / 1000
+	return &tick
 }
 
 func maxDurationMs(duration time.Duration) int64 {
@@ -554,7 +566,7 @@ func (s *Server) finalizeMatchAnalyticsLocked(endReason string, now time.Time, d
 func (s *Server) reportMatchMetrics(report matchMetricsReport) {
 	body, err := json.Marshal(report)
 	if err != nil {
-		s.logger.Printf("match metrics payload failed: %v", err)
+		s.logMatchMetrics("match metrics payload failed: %v", err)
 		MatchMetricsReportsDropped.Inc()
 		return
 	}
@@ -571,9 +583,9 @@ func (s *Server) reportMatchMetrics(report matchMetricsReport) {
 		}
 		if !shouldRetryMatchMetrics(statusCode, err) {
 			if err != nil {
-				s.logger.Printf("match metrics report failed permanently: %v", err)
+				s.logMatchMetrics("match metrics report failed permanently: %v", err)
 			} else {
-				s.logger.Printf("match metrics report rejected permanently: status=%d", statusCode)
+				s.logMatchMetrics("match metrics report rejected permanently: status=%d", statusCode)
 			}
 			MatchMetricsReportsDropped.Inc()
 			return
@@ -582,8 +594,15 @@ func (s *Server) reportMatchMetrics(report matchMetricsReport) {
 			time.Sleep(s.cfg.MatchAnalyticsRetryDelay)
 		}
 	}
-	s.logger.Printf("match metrics report exhausted retries for match %s", report.MatchID)
+	s.logMatchMetrics("match metrics report exhausted retries for match %s", report.MatchID)
 	MatchMetricsReportsDropped.Inc()
+}
+
+func (s *Server) logMatchMetrics(format string, args ...any) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.Printf(format, args...)
 }
 
 func (s *Server) postMatchMetricsReport(url string, body []byte) (int, error) {

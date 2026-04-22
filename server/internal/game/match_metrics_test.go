@@ -2,6 +2,7 @@ package game
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -129,6 +130,44 @@ func TestMatchAnalyticsAssignsPlacementToEvictedParticipants(t *testing.T) {
 	}
 }
 
+func TestMatchAnalyticsEventsIncludeTickField(t *testing.T) {
+	server := newClassicTestServer()
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	collector := newMatchMetricsCollector(&Lobby{
+		ID:        "lobby-1",
+		MatchID:   "match-1",
+		MatchKind: matchKindNormal,
+	}, server.cfg, start)
+	player := &Player{
+		ID:        "player-1",
+		Name:      "Pilot",
+		Connected: true,
+		Alive:     true,
+		Mass:      10,
+	}
+	collector.RegisterParticipant(player, "player-hash", start)
+	collector.OnPickup(player, 1, 0, start.Add(1500*time.Millisecond))
+
+	if len(collector.events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(collector.events))
+	}
+	event := collector.events[0]
+	if event.Tick == nil {
+		t.Fatalf("event tick is nil")
+	}
+	if *event.Tick != 90 {
+		t.Fatalf("event tick = %d, want 90", *event.Tick)
+	}
+
+	body, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(body), `"tick":90`) {
+		t.Fatalf("event json = %s, want tick field", body)
+	}
+}
+
 func TestMatchAnalyticsSenderRetriesServerErrors(t *testing.T) {
 	attempts := 0
 	server := newClassicTestServer()
@@ -194,5 +233,80 @@ func TestMatchAnalyticsSenderDoesNotRetryValidationErrors(t *testing.T) {
 
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestMatchAnalyticsSenderDoesNotRequireLoggerForFailureLogs(t *testing.T) {
+	t.Run("marshal error", func(t *testing.T) {
+		server := newClassicTestServer()
+		server.logger = nil
+
+		server.reportMatchMetrics(matchMetricsReport{
+			SchemaVersion: matchMetricsSchemaVersion,
+			MatchID:       "match-1",
+			LobbyID:       "lobby-1",
+			MatchKind:     string(matchKindNormal),
+			EndReason:     matchEndReasonTimeLimit,
+			StartedAt:     time.Now(),
+			EndedAt:       time.Now(),
+			MatchMetrics:  map[string]any{"unsupported": func() {}},
+		})
+	})
+
+	t.Run("permanent rejection", func(t *testing.T) {
+		server := newClassicTestServer()
+		server.logger = nil
+		server.cfg.MatchAnalyticsReportRetries = 2
+		server.cfg.APIServerURL = "http://api.test"
+		attempts := 0
+		server.httpClient = &http.Client{
+			Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				attempts++
+				return &http.Response{
+					StatusCode: http.StatusBadRequest,
+					Body:       io.NopCloser(strings.NewReader(`{"status":"validation_error"}`)),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		}
+
+		server.reportMatchMetrics(validMatchMetricsReport())
+
+		if attempts != 1 {
+			t.Fatalf("attempts = %d, want 1", attempts)
+		}
+	})
+
+	t.Run("retry exhaustion", func(t *testing.T) {
+		server := newClassicTestServer()
+		server.logger = nil
+		server.cfg.MatchAnalyticsReportRetries = 0
+		server.cfg.APIServerURL = "http://api.test"
+		attempts := 0
+		server.httpClient = &http.Client{
+			Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				attempts++
+				return nil, errors.New("network down")
+			}),
+		}
+
+		server.reportMatchMetrics(validMatchMetricsReport())
+
+		if attempts != 1 {
+			t.Fatalf("attempts = %d, want 1", attempts)
+		}
+	})
+}
+
+func validMatchMetricsReport() matchMetricsReport {
+	now := time.Now()
+	return matchMetricsReport{
+		SchemaVersion: matchMetricsSchemaVersion,
+		MatchID:       "match-1",
+		LobbyID:       "lobby-1",
+		MatchKind:     string(matchKindNormal),
+		EndReason:     matchEndReasonTimeLimit,
+		StartedAt:     now,
+		EndedAt:       now,
 	}
 }
